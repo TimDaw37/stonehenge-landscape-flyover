@@ -765,39 +765,158 @@ addEventListener('keydown', (ev) => {
 addEventListener('keyup', (ev) => keys.delete(ev.code));
 addEventListener('blur', () => keys.clear());
 
-// Mouse / touch drag to look.
+// Mouse / touch: left drag grabs the ground and moves the landscape as a block (map style); right drag
+// (or Ctrl/Alt + left drag) looks around; middle drag (or Shift + right drag) orbits the grabbed point.
+// Plan view: left drag pans, right drag turns the heading. Touch: one finger grabs, two fingers pinch to
+// zoom, twist to turn and drag up/down together to tilt.
 const canvas = renderer.domElement;
-let look = null;
-canvas.addEventListener('pointerdown', (ev) => {
-  if (ev.pointerType === 'mouse' && ev.button !== 0) return;
-  look = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: 0 };
+canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
+let drag = null; // { id, mode: 'grab'|'look'|'orbit', x, y, moved, P (grabbed ground point), t0 }
+const touches = new Map(); // pointerId -> { x, y }
+let pinch = null;
+const _o = new THREE.Vector3(), _d = new THREE.Vector3();
+// A view ray through a pixel for the camera at flight.pos with the current heading (cam may lag a frame).
+function viewRay(clientX, clientY) {
+  applyCamera();
+  cam.updateMatrixWorld();
+  ndc.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(ndc, cam);
+  _o.copy(ray.ray.origin); _d.copy(ray.ray.direction);
+}
+function startDrag(ev, mode) {
+  drag = { id: ev.pointerId, mode, x: ev.clientX, y: ev.clientY, moved: 0, P: null, auto: !!(flyAnim || tour) };
+  if (mode === 'grab' || mode === 'orbit') {
+    const hit = groundHit(ev.clientX, ev.clientY);
+    if (hit) { drag.P = hit; drag.t0 = hit.distanceTo(flight.pos); }
+    else if (mode === 'grab' && !plan) drag.mode = 'look'; // sky under the pointer: nothing to grab
+  }
   canvas.setPointerCapture(ev.pointerId);
   canvas.classList.add('drag');
-});
-canvas.addEventListener('pointermove', (ev) => {
-  if (!look || ev.pointerId !== look.id) return;
-  const dx = ev.clientX - look.x, dy = ev.clientY - look.y;
-  look.x = ev.clientX; look.y = ev.clientY;
-  look.moved += Math.abs(dx) + Math.abs(dy);
-  if (look.moved > 3) cancelAuto();
-  if (plan) { // plan view: drag pans the map (metres per pixel at the ground below)
+}
+// Move the camera horizontally so the grabbed point sits under the pointer again.
+function grabTo(clientX, clientY) {
+  const P = drag.P;
+  if (!P) { // plan view fallback: metres per pixel at the ground below
+    const dx = clientX - drag.x, dy = clientY - drag.y;
     const agl = flight.pos.y - groundOr(flight.pos.x, flight.pos.z, flight.pos.y - 300);
     const mpp = 2 * agl * Math.tan(cam.fov * DEG / 2) / innerHeight;
     const c = Math.cos(flight.yaw), sn = Math.sin(flight.yaw);
     flight.pos.x -= (dx * c - dy * sn) * mpp; flight.pos.z -= (dx * sn + dy * c) * mpp;
     return;
   }
-  const k = 0.0032 * (cam.fov / 60) * (ev.pointerType === 'touch' ? 1.3 : 1);
+  viewRay(clientX, clientY);
+  // Shallow rays would meet the grab plane near the horizon: cap the reach at 4x the grab distance
+  // (and at least 300 m), so a drag toward the horizon slides steadily instead of flinging off.
+  const tMax = Math.max(4 * drag.t0, 300);
+  let t = _d.y < -1e-4 ? (P.y - _o.y) / _d.y : Infinity;
+  if (!(t > 0) || t > tMax) t = tMax;
+  const qx = _o.x + _d.x * t, qz = _o.z + _d.z * t;
+  flight.pos.x += P.x - qx; flight.pos.z += P.z - qz;
+}
+function lookBy(dx, dy, touchK) {
+  const k = 0.0032 * (cam.fov / 60) * (touchK || 1);
   flight.yaw -= dx * k;
-  flight.pitch = THREE.MathUtils.clamp(flight.pitch - dy * k, -1.52, 1.52);
+  if (!plan) flight.pitch = THREE.MathUtils.clamp(flight.pitch - dy * k, -1.52, 1.52);
+}
+// Orbit the camera around ground point P: yaw by dYaw, raise/lower the view by dTilt (radians).
+function orbitAround(P, dYaw, dTilt) {
+  const v = flight.pos.clone().sub(P);
+  const c = Math.cos(dYaw), sn = Math.sin(dYaw);
+  const vx = v.x * c - v.z * sn, vz = v.x * sn + v.z * c;
+  v.x = vx; v.z = vz;
+  flight.yaw += dYaw;
+  if (dTilt && !plan) {
+    const hd = Math.hypot(v.x, v.z), r = v.length();
+    const el = Math.atan2(v.y, hd);
+    const el2 = THREE.MathUtils.clamp(el + dTilt, 3 * DEG, 85 * DEG);
+    const s2 = Math.cos(el2) * r / Math.max(hd, 1e-6);
+    v.x *= s2; v.z *= s2; v.y = Math.sin(el2) * r;
+    flight.pitch = THREE.MathUtils.clamp(flight.pitch - (el2 - el), -1.52, 1.52);
+  }
+  flight.pos.copy(P).add(v);
+}
+canvas.addEventListener('pointerdown', (ev) => {
+  if (ev.pointerType === 'touch') {
+    touches.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    canvas.setPointerCapture(ev.pointerId);
+    if (touches.size === 1) startDrag(ev, 'grab');
+    else if (touches.size === 2) { drag = null; pinch = pinchState(); }
+    return;
+  }
+  let mode = null;
+  if (ev.button === 0) mode = (ev.ctrlKey || ev.altKey || ev.metaKey) ? 'look' : 'grab';
+  else if (ev.button === 2) mode = (ev.shiftKey && !plan) ? 'orbit' : 'look';
+  else if (ev.button === 1) { mode = plan ? 'look' : 'orbit'; ev.preventDefault(); }
+  if (!mode) return;
+  startDrag(ev, mode);
 });
-const endLook = (ev) => { if (look && ev.pointerId === look.id) { look = null; canvas.classList.remove('drag'); } };
-canvas.addEventListener('pointerup', endLook);
-canvas.addEventListener('pointercancel', endLook);
+function pinchState() {
+  const [a, b] = [...touches.values()];
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  return { mx, my, dist: Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1), ang: Math.atan2(b.y - a.y, b.x - a.x), P: groundHit(mx, my) };
+}
+canvas.addEventListener('pointermove', (ev) => {
+  if (ev.pointerType === 'touch' && touches.has(ev.pointerId)) {
+    touches.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (touches.size >= 2 && pinch) {
+      const n = pinchState(), o = pinch;
+      cancelAuto();
+      // pinch: move along the view ray to the point between the fingers, keeping the same share of the distance
+      const hit = o.P;
+      if (hit) {
+        const f = o.dist / n.dist; // < 1 when spreading (zoom in)
+        const v = flight.pos.clone().sub(hit);
+        const len = v.length();
+        const len2 = THREE.MathUtils.clamp(len * f, 8, 12000);
+        flight.pos.copy(hit).addScaledVector(v, len2 / Math.max(len, 1e-6));
+        let dA = n.ang - o.ang; if (dA > Math.PI) dA -= 2 * Math.PI; if (dA < -Math.PI) dA += 2 * Math.PI;
+        orbitAround(hit, -dA, plan ? 0 : (n.my - o.my) * 0.004);
+      } else lookBy(n.mx - o.mx, n.my - o.my, 1.3);
+      pinch = { ...n, P: hit || n.P };
+      return;
+    }
+  }
+  if (!drag || ev.pointerId !== drag.id) return;
+  const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+  drag.moved += Math.abs(dx) + Math.abs(dy);
+  if (!drag.live) {
+    if (drag.moved <= 3) return; // a click, not a drag: leave any flight or tour running
+    // Start of a real drag: stop flights and the tour, and take the ground point under the pointer now
+    // (the camera may have moved since the button went down).
+    drag.live = true;
+    if (drag.auto) { // the camera was moving: grab what is under the pointer now
+      cancelAuto();
+      if (drag.mode === 'grab' || drag.mode === 'orbit') {
+        const hit = groundHit(ev.clientX, ev.clientY);
+        if (hit) { drag.P = hit; drag.t0 = hit.distanceTo(flight.pos); }
+      }
+      drag.x = ev.clientX; drag.y = ev.clientY;
+      return;
+    }
+  }
+  if (drag.mode === 'grab') grabTo(ev.clientX, ev.clientY);
+  else if (drag.mode === 'orbit' && drag.P) orbitAround(drag.P, -dx * 0.005, dy * 0.004);
+  else lookBy(dx, dy, ev.pointerType === 'touch' ? 1.3 : 1);
+  drag.x = ev.clientX; drag.y = ev.clientY;
+});
+const endDrag = (ev) => {
+  if (ev.pointerType === 'touch') {
+    touches.delete(ev.pointerId);
+    if (touches.size < 2) pinch = null;
+    if (touches.size === 1 && !drag) { // lift one of two fingers: carry on grabbing with the other
+      const [id, t] = [...touches.entries()][0];
+      startDrag({ pointerId: id, clientX: t.x, clientY: t.y }, 'grab');
+    }
+  }
+  if (drag && ev.pointerId === drag.id) { drag = null; canvas.classList.remove('drag'); }
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
 
 // March a view ray against the ground grids.
 const ndc = new THREE.Vector2(), ray = new THREE.Raycaster();
 function groundHit(clientX, clientY) {
+  applyCamera(); cam.updateMatrixWorld();
   ndc.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(ndc, cam);
   const o = ray.ray.origin, d = ray.ray.direction;
@@ -837,7 +956,8 @@ canvas.addEventListener('dblclick', (ev) => {
   flyTo(poseAround(hit.x, hit.z, { dist, fromDeg: from, up: dist * 0.45, look: 2 }));
 });
 
-// Touch: the stick moves (up/down = forward/back, left/right = turn); drag elsewhere looks; buttons climb and sink.
+// Touch: the stick moves (up/down = forward/back, left/right = turn); buttons climb and sink. Dragging elsewhere
+// grabs the ground (one finger) or pinches, twists and tilts (two fingers), as above.
 {
   const stick = document.getElementById('stick'), knob = document.getElementById('knob');
   let sid = null, cx = 0, cy = 0;
@@ -1797,7 +1917,7 @@ FLY.api = {
   get flight() { return flight; }, get grids() { return grids; }, get tiles() { return tiles; },
   setSky(o) { if (o.year != null) epochYear = o.year; if (o.doy != null) doy = o.doy; if (o.mode) bodyMode = o.mode; if (o.limb) limb = o.limb; paintSkyButtons(); reseek(); syncUtUi(); },
   setMinute(m) { minuteUt = m; pendingSeek = false; autoSeekPending = false; manualTime = true; syncUtUi(); },
-  keys, setPeriod, togglePlan, runAlignment, computeAlignment, ALIGN_EVENTS, setRayMode, get alignActive() { return alignActive; }, clearAlign() { alignActive = null; }, get plan() { return plan; }, get periodAlpha() { return periodAlpha; },
+  keys, setPeriod, togglePlan, groundHit, get flying() { return !!(flyAnim || tour); }, runAlignment, computeAlignment, ALIGN_EVENTS, setRayMode, get alignActive() { return alignActive; }, clearAlign() { alignActive = null; }, get plan() { return plan; }, get periodAlpha() { return periodAlpha; },
   // Bearing of the drawn sun/moon disc as seen from the camera, read back from the scene.
   programs() { return renderer.info.programs.map((p) => p.name + ' ' + p.usedTimes); },
   discBearing() {

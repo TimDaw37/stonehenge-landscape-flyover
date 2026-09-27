@@ -10,9 +10,12 @@ It is a single static page (three.js + astronomy-engine, no build step). To run 
 
 - **W / S** or **↑ / ↓**: forward and back. **A / D**: sideways. **← / →**: turn.
 - **E / R**: up. **Q / F**: down. **Shift**: faster.
-- **Drag** to look, **mouse wheel** moves toward the pointer, **double-click** flies there.
-- **L**: labels on/off. **P**: plan view (straight down), with the alignment rays.
-- On a phone or tablet: a thumb stick (bottom left) and up/down buttons (bottom right).
+- **Left-drag** grabs the ground and moves the landscape as a block, map style: the point under the pointer stays under it (height and heading are kept; near the horizon the move is capped so it doesn't fling away).
+- **Right-drag** looks around (turn and tilt). On a trackpad: **Ctrl + drag** or **Alt + drag**.
+- **Middle-drag** or **Shift + right-drag** orbits around the grabbed point.
+- **Mouse wheel** moves toward the pointer, **double-click** flies there.
+- **L**: labels on/off. **P**: plan view (straight down), with the alignment rays. In plan view, drag pans and right-drag turns the heading.
+- On a phone or tablet: one finger moves the landscape, pinch zooms, twist turns, and a two-finger drag up or down tilts. The thumb stick (bottom left) and up/down buttons (bottom right) still fly.
 - The panel (top left) has: Go to Stonehenge / Woodhenge / Bulford, a guided tour, speed, lowest height above ground, labels, monuments, the period slider, sky (sunrise, sunset, moonrise, moonset; gleam, half orb or full orb; stars), epoch (modern or 2500 BC), date and time.
 
 ## Alignment check
