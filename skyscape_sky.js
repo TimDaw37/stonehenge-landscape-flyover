@@ -32,7 +32,7 @@ function isLeap(year) {
 
 /**
  * Match the viewer's day-of-year slider (1 = 1 Jan).
- * Dates before the modern epoch are proleptic Gregorian (Date.UTC leap rule).
+ * Dates before the modern epoch are proleptic Gregorian (Gregorian leap rule, years as given: 0 = 1 BC).
  * Stellarium uses the Julian calendar by default for those years. For the major
  * lunar standstill in -2498 the same moon position differs by about 3 minutes,
  * which is acceptable.
@@ -43,8 +43,11 @@ export function dateFromDoyMinute(year, doy, minuteUt) {
   let n = Math.max(1, Math.min(yearDays, Math.round(+doy) || 1));
   let m = 0;
   while (m < 12 && n > md[m]) { n -= md[m]; m++; }
-  const ms = Date.UTC(year, m, n, 0, 0, 0) + (+minuteUt || 0) * 60000;
-  return new Date(ms);
+  // Date.UTC reads years 0-99 as 1900-1999; setUTCFullYear takes the year as given.
+  const d = new Date(0);
+  d.setUTCFullYear(year, m, n);
+  d.setUTCHours(0, 0, 0, 0);
+  return new Date(d.getTime() + (+minuteUt || 0) * 60000);
 }
 
 export function sdFor(body) {

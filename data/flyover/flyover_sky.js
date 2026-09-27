@@ -2,10 +2,31 @@
 // (astronomy-engine apparent place, refraction on, limb meets the geometric skyline),
 // but with an observer at the camera's own latitude, longitude and height.
 import * as AE from '../../vendor/astronomy.esm.js';
-import { dateFromDoyMinute, refractionDeg, sampleAlt, sdFor, limbTrueOffset } from '../../skyscape_sky.js';
+import { refractionDeg, sampleAlt, sdFor, limbTrueOffset, SITE } from '../../skyscape_sky.js';
 import { osgbToWgs84 } from '../../vendor/osgb_wgs84.js';
 
 export const CE = 412245.35, CN = 142194.11, ORIGIN_OD = 102.588;
+
+// ---------------------------------------------------------------- dates
+// Date.UTC(y, ...) and new Date(y, ...) read years 0-99 as 1900-1999, so every calendar date here is built
+// with setUTCFullYear, which takes the year as given (proleptic Gregorian; 0 = 1 BC, -2499 = 2500 BC).
+/** UT Date for a proleptic Gregorian calendar date (month 0-11), any year including 0-99 and negative years. */
+export function utcDate(year, month, day, minutes = 0) {
+  const d = new Date(0);
+  d.setUTCFullYear(year, month, day);
+  d.setUTCHours(0, 0, 0, 0);
+  return new Date(d.getTime() + minutes * 60000);
+}
+function isLeap(year) { return (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)); }
+/** Same as skyscape_sky.dateFromDoyMinute (day of year 1 = 1 Jan, minutes UT), but right for years 0-99. */
+export function dateFromDoyMinute(year, doy, minuteUt) {
+  const md = [31, isLeap(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const yearDays = md.reduce((a, b) => a + b, 0);
+  let n = Math.max(1, Math.min(yearDays, Math.round(+doy) || 1));
+  let m = 0;
+  while (m < 12 && n > md[m]) { n -= md[m]; m++; }
+  return utcDate(year, m, n, +minuteUt || 0);
+}
 
 /** Grid convergence at a point: true azimuth = grid bearing + conv (degrees). */
 export function convergenceAt(e, n) {
@@ -104,21 +125,34 @@ function skylineBin(heightAt, x, z, eyeY, conv, opts) {
     return [best * 180 / Math.PI, r]; // altitude (deg); how far the ground data runs in this direction
   };
 }
-/** Same skyline as skylineAt, but each 0.25 deg bin is traced only when first read (for many quick look-ups). */
+/**
+ * Same skyline as skylineAt, but each 0.25 deg bin is traced only when first read (for many quick look-ups).
+ * The result can be kept and reused for the same eye point: bins traced once stay traced, and full() traces
+ * the rest and returns plain arrays (the same values skylineAt gives).
+ */
 export function lazySkylineAt(heightAt, x, z, eyeY, conv, opts = {}) {
   const n = 1440, alts = new Float32Array(n).fill(NaN), reach = new Float32Array(n).fill(NaN);
   const bin = skylineBin(heightAt, x, z, eyeY, conv, opts);
+  let traced = 0;
+  const fill = (i) => { const b = bin(i); alts[i] = b[0]; reach[i] = b[1]; traced++; };
   const wrap = (arr) => new Proxy(arr, {
     get(t, p) {
       if (typeof p === 'string') {
         const i = +p;
-        if (Number.isInteger(i) && i >= 0 && i < n) { if (Number.isNaN(t[i])) { const b = bin(i); alts[i] = b[0]; reach[i] = b[1]; } return t[i]; }
+        if (Number.isInteger(i) && i >= 0 && i < n) { if (Number.isNaN(t[i])) fill(i); return t[i]; }
       }
       const v = Reflect.get(t, p);
       return typeof v === 'function' ? v.bind(t) : v;
     },
   });
-  return { alts: wrap(alts), step: 0.25, reach: wrap(reach) };
+  const sky = { alts: wrap(alts), step: 0.25, reach: wrap(reach), x, z, eyeY, conv };
+  let whole = null;
+  sky.full = () => {
+    if (!whole) { for (let i = 0; i < n; i++) if (Number.isNaN(alts[i])) fill(i); whole = { alts, step: 0.25, reach, x, z, eyeY, conv }; }
+    return whole;
+  };
+  Object.defineProperty(sky, 'traced', { get: () => traced });
+  return sky;
 }
 
 /** A UT Date as the viewer's { year, doy, minute } (same proleptic calendar as dateFromDoyMinute). */
@@ -131,9 +165,13 @@ export function doyMinuteOf(date) {
 }
 
 /** Moment of the June solstice ('midsummer'), December solstice ('midwinter') or March equinox ('equinox'). */
+// Same search as astronomy-engine Seasons(), started from a date built with utcDate: Seasons() itself uses
+// Date.UTC and so finds 1950's solstice when asked for AD 50.
 export function solarEventDate(year, kind) {
-  const s = AE.Seasons(year);
-  return (kind === 'midsummer' ? s.jun_solstice : kind === 'midwinter' ? s.dec_solstice : s.mar_equinox).date;
+  const [lon, month] = kind === 'midsummer' ? [90, 5] : kind === 'midwinter' ? [270, 11] : [0, 2];
+  const t = AE.SearchSunLongitude(lon, utcDate(year, month, 10), 20);
+  if (!t) throw new Error('No ' + kind + ' found in year ' + year);
+  return t.date;
 }
 
 // Mean longitude of the Moon's ascending node (Meeus, Astronomical Algorithms 47.7), degrees.
@@ -178,4 +216,27 @@ export function moonExtremeNear(centre, north, spanDays = 250) {
   return { date: new Date(t), dec: geoMoonDec(t) };
 }
 
-export { dateFromDoyMinute, sdFor };
+// Stars: J2000 places precessed by astronomy-engine for the Stonehenge observer, from a Date
+// built here, so years 0-99 are right. Rows: [ra hours, dec deg, mag].
+const starObs = new AE.Observer(SITE.lat, SITE.lon, SITE.height);
+function eqj(raHours, decDeg) {
+  const ra = raHours * 15 * Math.PI / 180, dec = decDeg * Math.PI / 180, cd = Math.cos(dec);
+  return new AE.Vector(cd * Math.cos(ra), cd * Math.sin(ra), Math.sin(dec), 0);
+}
+function horOf(rot, raHours, decDeg) {
+  const hor = AE.RotateVector(rot, eqj(raHours, decDeg));
+  const alt = Math.asin(Math.max(-1, Math.min(1, hor.z))) * 180 / Math.PI;
+  let az = Math.atan2(-hor.y, hor.x) * 180 / Math.PI; if (az < 0) az += 360;
+  return { x: -hor.y, y: hor.z, z: -hor.x, alt, az };
+}
+export function starHorizontal(raHours, decDeg, year, doy, minuteUt) {
+  return horOf(AE.Rotation_EQJ_HOR(dateFromDoyMinute(year, doy, minuteUt), starObs), raHours, decDeg);
+}
+export function starsAbove(catalog, year, doy, minuteUt, minAlt) {
+  const rot = AE.Rotation_EQJ_HOR(dateFromDoyMinute(year, doy, minuteUt), starObs);
+  const floor = minAlt == null ? -0.4 : minAlt, out = [];
+  for (const row of catalog) { const h = horOf(rot, row[0], row[1]); if (h.alt >= floor) out.push({ x: h.x, y: h.y, z: h.z, mag: row[2], alt: h.alt }); }
+  return out;
+}
+
+export { sdFor };

@@ -1,4 +1,4 @@
-// Terrain worker for index.html: fetch compact grids, decode, build meshes off the main thread.
+// Terrain worker for the flyover page (landscape_v2.html; index.html in the public repo): fetch compact grids, decode, build meshes off the main thread.
 // Every array posted back is a fresh buffer (vendor three ignores typed-array byteOffset).
 'use strict';
 const BASE = new URL('./', self.location.href).href;
@@ -17,7 +17,9 @@ function decodeGrid(buf, name) {
   const h = new Float32Array(n);
   for (let i = 0; i < n; i++) h[i] = g.hmin + q[i] * g.hscale;
   g.h = h;
-  g.rgb = new Uint8Array(buf.slice(64 + 2 * n, 64 + 5 * n));
+  // Version 2, flag bit 0: no colour block (far.bin); the caller fills g.rgb.
+  const noRgb = dv.getUint32(4, true) >= 2 && (dv.getUint32(40, true) & 1);
+  g.rgb = noRgb ? null : new Uint8Array(buf.slice(64 + 2 * n, 64 + 5 * n));
   g.x1 = g.x0 + (nx - 1) * g.dx;
   g.z1 = g.z0 + (ny - 1) * g.dz;
   return g;
@@ -139,6 +141,10 @@ function riverGround(G, x, z) {
     const under = (r) => r && xa >= r.x0 && xb <= r.x1 && za >= r.z0 && zb <= r.z1;
     if (!(under(D) || under(G.near)) && (h = sampleGrid(C, x, z)) != null) best = Math.max(best, h);
   }
+  // The far ground (OS Terrain 50) is drawn wherever its cell is not wholly under the wide ground.
+  const F = G.far;
+  if (F && (!C || best === -Infinity || !(x > C.x0 && x < C.x1 && z > C.z0 && z < C.z1) ||
+      (x - C.x0 < F.dx || C.x1 - x < F.dx || z - C.z0 < F.dz || C.z1 - z < F.dz)) && (h = sampleGrid(F, x, z)) != null) best = Math.max(best, h);
   if (best === -Infinity && C) { // just off the map: the nearest edge height, so the ribbon does not drop to 0
     const cx = Math.min(C.x1, Math.max(C.x0, x)), cz = Math.min(C.z1, Math.max(C.z0, z));
     if ((h = sampleGrid(C, cx, cz)) != null) best = h;
@@ -341,6 +347,81 @@ async function buildMonuments(G) {
   }
 }
 
+// Wide ground beyond the lidar (far.bin, OS Terrain 50 at 100 m): only for the skyline and the distant view.
+// Coloured with the wide ground's mean colour; cells wholly under the wide ground are left out and points
+// under it sink 2 m, as the other sheets do.
+async function buildFar(coarse, G0 = {}) {
+  try {
+    const far = decodeGrid(await get('far.bin'), 'far');
+    if (!far.rgb) {
+      let r = 0, g = 0, b = 0; const n = coarse.rgb.length / 3;
+      for (let i = 0; i < coarse.rgb.length; i += 3) { r += coarse.rgb[i]; g += coarse.rgb[i + 1]; b += coarse.rgb[i + 2]; }
+      r /= n; g /= n; b /= n;
+      far.rgb = new Uint8Array(far.nx * far.ny * 3);
+      for (let k = 0; k < far.nx * far.ny; k++) {
+        // a little lighter on the high chalk, darker in the valleys
+        const t = Math.max(-1, Math.min(1, (far.h[k] - 20) / 80)) * 10;
+        far.rgb[k * 3] = Math.max(0, Math.min(255, r + t)); far.rgb[k * 3 + 1] = Math.max(0, Math.min(255, g + t)); far.rgb[k * 3 + 2] = Math.max(0, Math.min(255, b + t * 0.6));
+      }
+    }
+    { const gi = gridInfo(far); self.postMessage(gi.msg, gi.tr); }
+    const under = (xa, za, xb, zb) => xa >= coarse.x0 && xb <= coarse.x1 && za >= coarse.z0 && zb <= coarse.z1;
+    const inside = (x, z) => x > coarse.x0 + 1 && x < coarse.x1 - 1 && z > coarse.z0 + 1 && z < coarse.z1 - 1;
+    const fm = buildMesh(far, 0, 0, far.nx - 1, far.ny - 1, 1, under, 0, inside);
+    self.postMessage({ type: 'mesh', name: 'far', mesh: fm }, meshTransfer(fm));
+    await buildFarRivers({ coarse, far, near: G0.near, detail: G0.detail });
+  } catch (err) {
+    self.postMessage({ type: 'error', message: 'far ground: ' + String(err && err.message || err) });
+  }
+}
+
+// Rivers over the far ground (far_rivers.bin, OS Open Rivers centrelines; tools/build_far_rivers.py).
+// Beyond the wide ground each river becomes a ribbon draped like the Avon (78 m wide for the Avon, as its
+// ribbon, 40 m for the others), overlapping the wide ground's edge by 60 m so it joins the inner ribbons. Every
+// river is also returned as a thin draped line for the page to show from high up, where ribbons are sub-pixel.
+const FAR_RIVER_W = [78, 40, 40, 40, 40, 40]; // Avon, Till, Wylye, Nadder, Bourne, Ebble
+async function buildFarRivers(G) {
+  const buf = await get('far_rivers.bin');
+  const dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== 0x57594c46) throw new Error('far_rivers.bin: bad magic');
+  const nl = dv.getUint32(8, true), C = G.coarse, OV = 60;
+  const inner = (x, z) => x > C.x0 + OV && x < C.x1 - OV && z > C.z0 + OV && z < C.z1 - OV;
+  const runs = [], line = [];
+  let q = 16;
+  for (let l = 0; l < nl; l++) {
+    const ri = dv.getUint8(q), n = dv.getUint16(q + 2, true); q += 4;
+    const pts = [];
+    for (let k = 0; k < n; k++, q += 8) pts.push([dv.getFloat32(q, true), dv.getFloat32(q + 4, true)]);
+    // densify to about 40 m
+    const d = [pts[0]];
+    for (let k = 1; k < pts.length; k++) {
+      const a = pts[k - 1], b = pts[k], m = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 40));
+      for (let s = 1; s <= m; s++) d.push([a[0] + (b[0] - a[0]) * s / m, a[1] + (b[1] - a[1]) * s / m]);
+    }
+    // thin line, every other point, 3 m above the drawn ground (not over the inner Avon and Till ribbons)
+    for (let k = 2; k < d.length; k += 2) {
+      const a = d[k - 2], b = d[k];
+      if (ri <= 1 && inner(a[0], a[1]) && inner(b[0], b[1])) continue;
+      line.push(a[0], riverGround(G, a[0], a[1]) + 3, a[1], b[0], riverGround(G, b[0], b[1]) + 3, b[1]);
+    }
+    // ribbons outside the wide ground (split where the river enters it)
+    const w = (FAR_RIVER_W[ri] || 40) / 2;
+    let cur = [];
+    for (let k = 0; k < d.length; k++) {
+      const [x, z] = d[k];
+      if (inner(x, z)) { if (cur.length > 1) runs.push(cur); cur = []; continue; }
+      const a = d[Math.max(0, k - 1)], b = d[Math.min(d.length - 1, k + 1)];
+      const tx = b[0] - a[0], tz = b[1] - a[1], L = Math.hypot(tx, tz) || 1;
+      const nx = -tz / L * w, nz = tx / L * w;
+      cur.push([x + nx, z + nz, x - nx, z - nz]);
+    }
+    if (cur.length > 1) runs.push(cur);
+  }
+  const m = riverMesh(G, runs, 40, 80);
+  const lp = new Float32Array(line);
+  self.postMessage({ type: 'farRivers', pos: m.pos, idx: m.idx, line: lp }, [m.pos.buffer, m.idx.buffer, lp.buffer]);
+}
+
 function meshTransfer(m) { return [m.pos.buffer, m.nrm.buffer, m.col.buffer, m.idx.buffer]; }
 
 function gridInfo(g) {
@@ -395,7 +476,7 @@ self.onmessage = async (ev) => {
     const detail = decodeGrid(await pDetail, 'detail');
     { const gi = gridInfo(detail); self.postMessage(gi.msg, gi.tr); }
     {
-      // Avon: the repo ribbon's left/right pairs (runs split where it jumps), re-draped on the full ground.
+      // Avon: river.bin's left/right bank pairs (runs split where it jumps), re-draped on the full ground.
       const buf = await pRiver;
       const dv = new DataView(buf);
       if (dv.getUint32(0, true) !== MAGIC_R) throw new Error('river.bin: bad magic');
@@ -433,6 +514,7 @@ self.onmessage = async (ev) => {
     self.postMessage({ type: 'done' });
     // Monuments and the River Till, draped on the final ground (near > detail > coarse, as the page samples it).
     await buildMonuments({ near, detail, coarse });
+    await buildFar(coarse, { near, detail });
   } catch (err) {
     self.postMessage({ type: 'error', message: String(err && err.message || err) });
   }

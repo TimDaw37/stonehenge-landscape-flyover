@@ -1,25 +1,45 @@
-// index.html: free flight over the Stonehenge, Woodhenge and Bulford landscape.
+// The flyover page (landscape_v2.html; index.html in the public repo): free flight over the Stonehenge, Woodhenge and Bulford landscape.
 import * as THREE from 'three';
-import * as FS from './flyover_sky.js';
+import * as FS from './flyover_sky.js?v=2026-09-27.1720';
 import * as Sky from '../../skyscape_sky.js';
-import { starHorizontal, starsAbove } from '../../stars_sky.js';
+import { makeAligner, ALIGN_EVENTS, dateLabel, REACH_MIN } from './align_core.js?v=2026-09-27.1720';
+const { starHorizontal, starsAbove } = FS; // stars from flyover_sky (dates right for years 0-99)
 
 // ---------------------------------------------------------------- basics
 const FLY = window.__fly = { marks: {}, detailDone: false, bytes: {} };
+// Build stamp: the page's <meta name="flyover-build"> must match, or the browser is running cached old code.
+const BUILD = '2026-09-27.1720';
+FLY.build = BUILD;
+{
+  const want = document.querySelector('meta[name="flyover-build"]');
+  if (want && want.content !== BUILD) {
+    const w = document.createElement('div');
+    w.textContent = 'This page and its code are out of step (cached old files). Press Ctrl+F5 to reload.';
+    w.style.cssText = 'position:fixed;left:50%;top:44px;transform:translateX(-50%);z-index:9;background:#8a2f18;color:#fff;padding:6px 12px;border-radius:6px;font:13px system-ui';
+    document.body.appendChild(w);
+  }
+  const b = document.getElementById('buildStamp'); if (b) b.textContent = 'build ' + BUILD;
+}
 const mark = (k) => { if (FLY.marks[k] == null) FLY.marks[k] = Math.round(performance.now()); };
 FLY.slow = [];
 function timed(name, fn) { const t = performance.now(); const r = fn(); const d = performance.now() - t; if (d > 25) FLY.slow.push([name, Math.round(t), Math.round(d)]); return r; }
 const CE = 412245.35, CN = 142194.11, ORIGIN_OD = 102.588;
 const DEG = Math.PI / 180;
 const P = window.WOODHENGE_POSTS;
-const BU = window.BULFORD;
+const BU = window.BULFORD_FEATURES || window.BULFORD; // all 39 bulford-posts-3d features (data/flyover/bulford_features.js)
 const HZ = window.WOODHENGE_HORIZON;
 function localXZ(e, n) { return { x: e - CE, z: -(n - CN) }; }
-const EXTENT = 5950; // stay inside the 12 km ground
+// Flight limits: the 40 x 36 km far ground (far.bin, E 396000-436000, N 126000-162000) plus a 3 km margin,
+// and up to 30 km above sea level, high enough to see the whole ground at once.
+const BOUNDS = { x0: 396000 - 412245.35 - 3000, x1: 436000 - 412245.35 + 3000, z0: -(162000 - 142194.11) - 3000, z1: -(126000 - 142194.11) + 3000 };
+const MAX_H = 30000;
 const isTouch = ('ontouchstart' in window) || matchMedia('(pointer: coarse)').matches;
 if (isTouch) document.body.classList.add('touch');
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+// Logarithmic depth (code review): no artefacts found in side-by-side views (sun and moon at the skyline, river,
+// posts, far ground), and it keeps the 20 km far ground from flickering against the wide ground. ?logdepth=0 turns it off.
+const LOGDEPTH = new URLSearchParams(location.search).get('logdepth') !== '0';
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: LOGDEPTH });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.5 : 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -72,7 +92,7 @@ skyDome.frustumCulled = false;
 skyDome.renderOrder = -2;
 scene.add(skyDome);
 
-// Stars: directions from stars_sky (Stonehenge observer, x east, z minus TRUE north).
+// Stars: directions from flyover_sky.starsAbove (Stonehenge observer, x east, z minus TRUE north).
 // The points turn by the grid convergence so they sit in the grid frame, and follow the camera.
 let starsOn = true, starKey = '';
 const starGeo = new THREE.BufferGeometry();
@@ -93,8 +113,10 @@ starPoints.visible = false;
 scene.add(starPoints);
 
 // ---------------------------------------------------------------- ground sampling
-// Grids arrive from the worker: near (Stonehenge, 2.5 m), detail (Woodhenge/Bulford, 10 m), coarse (12 km, 55 m).
-const grids = { near: null, detail: null, coarse: null };
+// Grids arrive from the worker: near (Stonehenge, 2.5 m), detail (Woodhenge/Bulford, 10 m), coarse (12 km, 55 m),
+// far (OS Terrain 50, 40 x 36 km at 100 m: the skyline beyond the lidar, east and north-east of Bulford).
+const grids = { near: null, detail: null, coarse: null, far: null };
+let groundVer = 0; // bumped whenever a grid arrives: cached skylines are dropped
 function sampleGrid(g, x, z) {
   const fx = (x - g.x0) / g.dx, fz = (z - g.z0) / g.dz;
   if (!(fx >= 0 && fz >= 0 && fx <= g.nx - 1 && fz <= g.ny - 1)) return null;
@@ -110,8 +132,26 @@ function heightAt(x, z) {
   if (grids.near && (h = sampleGrid(grids.near, x, z)) != null) return h;
   if (grids.detail && (h = sampleGrid(grids.detail, x, z)) != null) return h;
   if (grids.coarse && (h = sampleGrid(grids.coarse, x, z)) != null) return h;
+  if (grids.far && (h = sampleGrid(grids.far, x, z)) != null) return h;
   return null;
 }
+// Skylines kept per eye point (x, z, eye height), traced lazily, and dropped when finer ground arrives, so
+// changing the date, the limb or the epoch re-times against the same skyline instead of re-tracing it.
+const skyCache = new Map();
+let skyCacheVer = -1;
+const skyStats = FLY.skyStats = { made: 0, reused: 0 };
+function skylineFor(x, z, eye, conv) {
+  if (skyCacheVer !== groundVer) { skyCache.clear(); skyCacheVer = groundVer; }
+  const key = x.toFixed(2) + ',' + z.toFixed(2) + ',' + eye.toFixed(2);
+  let s = skyCache.get(key);
+  if (s) { skyStats.reused++; skyCache.delete(key); skyCache.set(key, s); return s; }
+  s = FS.lazySkylineAt(heightAt, x, z, eye, conv);
+  skyStats.made++;
+  skyCache.set(key, s);
+  if (skyCache.size > 24) skyCache.delete(skyCache.keys().next().value);
+  return s;
+}
+const aligner = makeAligner({ FS, heightAt, skyline: skylineFor, hz: window.WOODHENGE_HORIZON });
 function groundOr(x, z, fallback) { const h = heightAt(x, z); return h == null ? fallback : h; }
 
 // ---------------------------------------------------------------- periods
@@ -129,26 +169,40 @@ function periodMat(mat, p) { periodMats[p].push(mat); return mat; }
 const RING_COLOUR = { A: 0xc45a1e, B: 0xd4a017, C: 0x2f8f55, D: 0x3d6ea8, E: 0x7a4ea3, F: 0xc43b4a, '?': 0xf4f0e6 };
 const centre = localXZ(P.centre.e, P.centre.n);
 const WH_GROUND0 = (HZ && HZ.eye && HZ.eye.ground_od) ? HZ.eye.ground_od - ORIGIN_OD : -2.19;
-let groundY = WH_GROUND0; // Woodhenge post seat
-const POST_H = 7.5;
+let groundY = WH_GROUND0; // Woodhenge centre ground (label, earthwork)
+// Woodhenge posts as on the Woodhenge page (woodhenge/posts.js, Cunnington's plan, seated on the concrete
+// markers): 0.64 m thick, one uniform height from the Timber monuments slider (1-12 m, 7.5 m as that page).
+// Heights are conjectural. Each post stands on the ground at its own spot (seatWoodhenge).
+let postH = 7.5, whPostsOn = true;
 const posts = [];
+const whRingOn = {}, whRingCount = {};
 {
   const mats = {};
-  for (const k of Object.keys(RING_COLOUR)) mats[k] = periodMat(new THREE.MeshLambertMaterial({ color: RING_COLOUR[k] }), 2);
+  for (const k of Object.keys(RING_COLOUR)) { mats[k] = periodMat(new THREE.MeshLambertMaterial({ color: RING_COLOUR[k] }), 2); whRingOn[k] = true; whRingCount[k] = 0; }
   const geo = new THREE.CylinderGeometry(0.32, 0.32, 3, 12);
   for (const hole of P.posts) {
-    const ring = hole.ring || '?';
+    const ring = RING_COLOUR[hole.ring] ? hole.ring : '?';
     const p = localXZ(hole.e, hole.n);
-    const mesh = new THREE.Mesh(geo, mats[ring] || mats['?']);
+    const mesh = new THREE.Mesh(geo, mats[ring]);
     mesh.castShadow = true;
-    mesh.scale.y = POST_H / 3;
-    mesh.position.set(p.x, groundY + POST_H / 2, p.z);
+    mesh.position.set(p.x, groundY, p.z);
+    mesh.userData.ring = ring;
+    mesh.userData.g = groundY; // ground under this post (local heightAt once the ground is in)
+    whRingCount[ring]++;
     scene.add(mesh);
     posts.push(mesh);
   }
 }
+function applyWoodhengePosts() {
+  for (const m of posts) {
+    m.visible = whPostsOn && whRingOn[m.userData.ring];
+    m.scale.y = postH / 3;
+    m.position.y = m.userData.g + postH / 2;
+  }
+}
+applyWoodhengePosts();
 
-// Stonehenge stones, present monument, same boxes as landscape.html.
+// Stonehenge stones, present monument: one box per stone from data/locked_poses.js.
 const LP = window.LOCKED_POSES;
 const S_ORIGIN_OD = (window.SITE_GROUND_OD && window.SITE_GROUND_OD.origin && window.SITE_GROUND_OD.origin.ground_od_m != null)
   ? Number(window.SITE_GROUND_OD.origin.ground_od_m) : 102.588;
@@ -200,25 +254,29 @@ if (LP) {
     const mesh = new THREE.Mesh(geo, matCache[c] || (matCache[c] = periodMat(new THREE.MeshLambertMaterial({ color: c }), 2)));
     mesh.castShadow = true;
     mesh.receiveShadow = true;
-    // Stones sit on the 1 m DTM ground OD from site_ground_od.js, as on landscape.html.
+    // Stones sit on the 1 m DTM ground OD from data/site_ground_od.js.
     mesh.position.set(p.x, seat.baseRel + (S_ORIGIN_OD - ORIGIN_OD) + seat.H / 2, p.z);
     mesh.rotation.y = THREE.MathUtils.degToRad(e.yaw_deg || 0);
     scene.add(mesh);
   }
 }
 
-// Bulford pits and the two standing posts, true size, on their surveyed ground OD.
-const buRings = [];
+// Bulford pits and the two standing posts, true size, on their surveyed ground OD (bulford-posts-3d data).
+// 'Post height boost' (Timber monuments) multiplies the two posts' heights, as the boost on bulford-posts-3d.
+const buRings = [], buFeat = [], buLabels = [];
+const buGroup = new THREE.Group();
+scene.add(buGroup);
+let buBoost = 1, buLabelsOn = false, buLabelMode = 'near'; // hole numbers: off by default; 'near' or 'all' when on
 if (BU) {
-  const kindCol = { post: 0xc42828, base: 0xd97706, pit: 0xeab308, henge: 0x44403c };
+  const kindCol = { post: 0xc42828, base: 0xd97706, axis: 0xdc2626, pit: 0xeab308, henge: 0x44403c };
+  const postGeo = new THREE.CylinderGeometry(0.28, 0.3, 1, 10);
   for (const f of BU.features) {
     const p = localXZ(f.e, f.n);
     const y = f.ground - ORIGIN_OD;
-    let mesh;
+    let mesh, h = 0;
     if (f.kind === 'post') {
-      const h = BU.post_h[f.id] || 2;
-      mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.3, h, 10), periodMat(new THREE.MeshLambertMaterial({ color: kindCol.post }), 2));
-      mesh.position.set(p.x, y + h / 2, p.z);
+      h = BU.post_h[f.id] || 2;
+      mesh = new THREE.Mesh(postGeo, periodMat(new THREE.MeshLambertMaterial({ color: kindCol.post, emissive: 0x5a1010 }) /* a little self-lit, so the posts read at twilight from the axis */, 2));
       mesh.castShadow = true;
     } else {
       // 'henge' features are pits cut into the two ring ditches (as bulford-posts-3d), not ring centres.
@@ -226,7 +284,9 @@ if (BU) {
       mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.35, 12), periodMat(new THREE.MeshLambertMaterial({ color: kindCol[f.kind] || kindCol.pit }), 2));
       mesh.position.set(p.x, y + 0.18, p.z);
     }
-    scene.add(mesh);
+    mesh.position.x = p.x; mesh.position.z = p.z;
+    buGroup.add(mesh);
+    buFeat.push({ f, mesh, x: p.x, z: p.z, y, h });
   }
   // The two henge ring ditches, once each, from BULFORD.henges (x east, z = minus north from the origin).
   for (const h of BU.henges || []) {
@@ -236,8 +296,14 @@ if (BU) {
     ring.position.set(p.x, 97 - ORIGIN_OD, p.z);
     ring.userData.en = [e, n];
     buRings.push(ring);
-    scene.add(ring);
+    buGroup.add(ring);
   }
+}
+function buTop(b) { return b.y + (b.h ? b.h * buBoost : 0.35); }
+function applyBulfordPosts() {
+  for (const b of buFeat) if (b.h) { b.mesh.scale.y = b.h * buBoost; b.mesh.position.y = b.y + b.h * buBoost / 2; }
+  for (const l of buLabels) l.spr.position.y = buTop(l.b) + 0.6;
+  if (BU_AXIS) { BU_AXIS.ha = BU_AXIS.ha0 * buBoost; BU_AXIS.hb = BU_AXIS.hb0 * buBoost; }
 }
 // Bearing of the two Bulford posts (grid, then true).
 let BU_POSTS_TRUE = null;
@@ -251,6 +317,17 @@ if (BU) {
   }
 }
 FLY.buPosts = BU_POSTS_TRUE;
+// The Bulford post axis in local metres: a = SW post (8647), b = NE post (9019), u = unit vector a -> b.
+let BU_AXIS = null;
+if (BU_POSTS_TRUE) {
+  const pp = BU.features.filter(f => f.kind === 'post');
+  const [fa, fb] = pp[0].n < pp[1].n ? pp : [pp[1], pp[0]];
+  const a = localXZ(fa.e, fa.n), b = localXZ(fb.e, fb.n), L = Math.hypot(b.x - a.x, b.z - a.z);
+  BU_AXIS = { a, b, fa, fb, L, ux: (b.x - a.x) / L, uz: (b.z - a.z) / L, az: BU_POSTS_TRUE.true,
+    ha: (BU.post_h[fa.id] || 2), hb: (BU.post_h[fb.id] || 2) };
+  BU_AXIS.ha0 = BU_AXIS.ha; BU_AXIS.hb0 = BU_AXIS.hb; // true heights; ha/hb follow the boost
+}
+applyBulfordPosts();
 
 // Labels: fixed screen size, so they read from anywhere in the landscape. Each canvas is sized to its
 // measured text (at most LABEL_MAX_W px, wrapped to two lines beyond that) and the sprite keeps its aspect.
@@ -317,10 +394,22 @@ function makeSiteLabels() {
   siteLabels.push({ spr: makeLabel('Woodhenge', true, 0, false, 2), x: centre.x, z: centre.z, y: groundY + 14 });
   if (BU) { const b = localXZ(BU.origin_e, BU.origin_n); siteLabels.push({ spr: makeLabel('Bulford', true, 0, false, 2), x: b.x - 25, z: b.z + 10, y: 95.5 - ORIGIN_OD + 10 }); }
   for (const l of siteLabels) { l.spr.position.set(l.x, l.y, l.z); l.maxD = 1e9; }
+  // Every Bulford hole/feature number with its heights (ground OD; the posts' height above ground).
+  const KIND = { post: 'post', base: 'base-station pit?', axis: 'axis pit', henge: 'henge pit', pit: 'pit' };
+  for (const b of buFeat) {
+    const f = b.f, post = f.kind === 'post';
+    const dep = post && BU.pit_depth && BU.pit_depth[f.id];
+    const t = f.id + ' ' + (KIND[f.kind] || f.kind) + (post ? ' ' + b.h.toFixed(1) + ' m tall' + (dep ? ', pit ' + dep + ' m deep' : '') : '') + ' \u00b7 ' + f.ground.toFixed(2) + ' m OD';
+    const spr = makeLabel(t, false, post ? 0.15 : 0.125, false, 2);
+    const l = { spr, x: b.x, z: b.z, b, post };
+    spr.position.set(b.x, buTop(b) + 0.6, b.z);
+    spr.visible = false;
+    buLabels.push(l);
+  }
   labelVisAt = 0;
 }
 
-// Woodhenge bank and ditch (schematic contour), as landscape.html. The ground north arrow is replaced by the compass.
+// Woodhenge bank and ditch (schematic contour). North is shown by the compass.
 const earthY0 = groundY;
 function addEarthwork(y0) {
   const r0 = 26, r1 = 66, nr = 34, na = 180;
@@ -371,7 +460,15 @@ function seatWoodhenge() {
   const y = heightAt(centre.x, centre.z);
   if (y == null) return;
   groundY = y;
-  for (const m of posts) m.position.y = y + POST_H / 2;
+  // Each post on the ground at its own spot, not one shared level.
+  let lo = Infinity, hi = -Infinity;
+  for (const m of posts) {
+    const g = heightAt(m.position.x, m.position.z);
+    m.userData.g = g == null ? y : g;
+    lo = Math.min(lo, m.userData.g); hi = Math.max(hi, m.userData.g);
+  }
+  FLY.whPostGround = [lo + ORIGIN_OD, hi + ORIGIN_OD];
+  applyWoodhengePosts();
   earthwork.position.y = y - earthY0;
   for (const r of buRings) { const p = r.position; p.y = groundOr(p.x, p.z, p.y - 0.4) + 0.4; }
   if (siteLabels[1]) siteLabels[1].spr.position.y = y + 14;
@@ -512,6 +609,38 @@ function updateLabelVis(now) {
     vis(l, on && d < range);
   }
   for (const l of siteLabels) vis(l, labelsOn);
+  // Bulford hole numbers: one label per feature, made once (makeSiteLabels). Off by default: none at all until
+  // 'Hole numbers' is ticked; then either up close (within 160 m, or a plan view under about 220 m across)
+  // or always. Labels that would overlap on screen are stacked upward (up to three deep; posts and nearer
+  // features first), and any still without room are hidden until the view comes closer, so none draw on top of each other.
+  const buOn = labelsOn && buLabelsOn && buGroup.visible;
+  const shown = [];
+  for (const l of buLabels) {
+    const d = Math.hypot(l.x - p.x, l.z - p.z), d3 = Math.hypot(d, l.spr.position.y - p.y);
+    const near = plan ? viewR < 220 : d3 < 160;
+    vis(l, buOn && (buLabelMode === 'all' || near));
+    l.spr.center.y = 0;
+    if (l.spr.visible) shown.push({ l, d: d3 });
+  }
+  if (shown.length > 1) {
+    applyCamera(); cam.updateMatrixWorld();
+    const f = innerHeight / 2 / Math.tan(cam.fov * DEG / 2), v = new THREE.Vector3(), placed = [];
+    shown.sort((a, b) => (b.l.post - a.l.post) || (a.d - b.d));
+    const site = siteLabels[2]; // keep clear of the 'Bulford' site label
+    if (site && site.spr.visible) { v.copy(site.spr.position).project(cam); if (v.z <= 1) placed.push({ x: (v.x + 1) / 2 * innerWidth, y: (1 - v.y) / 2 * innerHeight, w: site.spr.scale.x * f, h: site.spr.scale.y * f }); }
+    for (const { l } of shown) {
+      v.copy(l.spr.position).project(cam);
+      if (v.z > 1) continue;
+      const x = (v.x + 1) / 2 * innerWidth, y = (1 - v.y) / 2 * innerHeight;
+      const w = l.spr.scale.x * f, h = l.spr.scale.y * f;
+      let k = 0;
+      const hit = (k) => placed.some((r) => Math.abs(r.x - x) < (r.w + w) / 2 && Math.abs(r.y - (y - k * h)) < (r.h + h) / 2 * 0.98);
+      while (k < 4 && hit(k)) k++;
+      if (k === 4) { l.spr.visible = false; continue; } // no room: hidden until the view comes closer
+      l.spr.center.y = -k;
+      placed.push({ x, y: y - k * h, w, h });
+    }
+  }
 }
 function setLabels(on) {
   labelsOn = on;
@@ -520,15 +649,54 @@ function setLabels(on) {
 }
 document.getElementById('labelsOn').onchange = (ev) => setLabels(ev.target.checked);
 document.getElementById('lmOn').onchange = (ev) => { lmGroup.visible = ev.target.checked; setLabels(labelsOn); };
-if (MON) { const cr = document.getElementById('credits'); if (cr) cr.textContent = MON.credits; }
+
+// ---------------------------------------------------------------- Timber monuments panel
+{
+  const $ = (id) => document.getElementById(id);
+  const whBtn = $('whPostsBtn'), buBtn = $('buPostsBtn');
+  const paintBtn = (b, on, name) => { b.classList.toggle('active', on); b.textContent = (on ? 'Hide ' : 'Show ') + name; b.setAttribute('aria-pressed', on ? 'true' : 'false'); };
+  // Ring choice, as the Woodhenge page: A-F and Other, with counts and the ring colours.
+  const rings = $('whRings');
+  for (const k of Object.keys(RING_COLOUR)) {
+    if (!whRingCount[k]) continue;
+    const lab = document.createElement('label');
+    lab.className = 'ring';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = true; cb.dataset.ring = k;
+    cb.onchange = () => { whRingOn[k] = cb.checked; applyWoodhengePosts(); };
+    const sw = document.createElement('span');
+    sw.className = 'sw'; sw.style.background = '#' + RING_COLOUR[k].toString(16).padStart(6, '0');
+    lab.append(cb, sw, document.createTextNode((k === '?' ? 'Other' : k) + ' (' + whRingCount[k] + ')'));
+    rings.appendChild(lab);
+  }
+  whBtn.onclick = () => { whPostsOn = !whPostsOn; paintBtn(whBtn, whPostsOn, 'Woodhenge posts'); $('whCtl').hidden = !whPostsOn; applyWoodhengePosts(); };
+  $('whPostH').oninput = (ev) => { postH = +ev.target.value; $('whHLbl').textContent = postH.toFixed(1) + ' m'; applyWoodhengePosts(); };
+  buBtn.onclick = () => { buGroup.visible = !buGroup.visible; paintBtn(buBtn, buGroup.visible, 'Bulford posts'); $('buCtl').hidden = !buGroup.visible; labelVisAt = 0; };
+  $('buLabelsOn').onchange = (ev) => { buLabelsOn = ev.target.checked; $('buLabelMode').disabled = !buLabelsOn; if (buLabelsOn && !labelsOn) setLabels(true); labelVisAt = 0; };
+  $('buLabelMode').onchange = (ev) => { buLabelMode = ev.target.value; labelVisAt = 0; };
+  $('buBoost').oninput = (ev) => {
+    buBoost = +ev.target.value;
+    $('buBoostLbl').textContent = buBoost + '\u00d7';
+    $('buBoostNote').hidden = buBoost <= 1;
+    applyBulfordPosts();
+    labelVisAt = 0;
+  };
+  if (!BU) buBtn.disabled = true;
+  paintBtn(whBtn, true, 'Woodhenge posts'); paintBtn(buBtn, !!BU, 'Bulford posts');
+}
+{
+  const cr = document.getElementById('credits');
+  const terrain = 'Terrain: EA lidar DTM \u00a9 Environment Agency; OS Terrain 50 and OS Open Rivers, contains OS data \u00a9 Crown copyright and database right 2026 (OGL). ';
+  if (cr) cr.textContent = terrain + (MON ? MON.credits : '');
+}
 
 // ---------------------------------------------------------------- terrain streaming
 const loadEl = document.getElementById('load');
-const loadState = { coarse: false, near: false, river: false, tiles: 0, nTiles: 36, error: '' };
+const loadState = { coarse: false, near: false, river: false, far: false, tiles: 0, nTiles: 36, error: '' };
 function paintLoad() {
   const t = (b) => b ? '✓' : '…';
   loadEl.textContent = loadState.error ? ('Ground: ' + loadState.error)
-    : FLY.detailDone ? 'Ground: full detail'
+    : FLY.detailDone ? 'Ground: full detail' + (loadState.far ? '' : ' · horizon …')
     : `Ground: wide ${t(loadState.coarse)} · Stonehenge ${t(loadState.near)} · detail ${loadState.tiles}/${loadState.nTiles}`;
   loadEl.style.opacity = FLY.detailDone ? '0.45' : '1';
 }
@@ -564,6 +732,7 @@ const riverMat = new THREE.MeshLambertMaterial({ vertexColors: true, color: 0x00
 // Plus a small clip-space depth bias, about 0.2% of the distance to the camera (the bias is 2 x near x 0.002 in
 // clip units, which works out as that fraction at every range), so the ground cannot flicker through at seams.
 const riverBias = { value: 0 };
+let farRiverLines = null; // thin river lines, shown from high up (farRivers message)
 riverMat.onBeforeCompile = (sh) => {
   sh.uniforms.uRiverBias = riverBias;
   sh.vertexShader = 'uniform float uRiverBias;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  gl_Position.z -= uRiverBias;');
@@ -604,12 +773,14 @@ function updateCoarseHole() {
 const tiles = [];
 const addQueue = [];
 
-const worker = new Worker(new URL('./terrain_worker.js', import.meta.url));
+const worker = new Worker(new URL('./terrain_worker.js?v=' + BUILD, import.meta.url));
 worker.onmessage = (ev) => {
   const d = ev.data;
   if (d.type === 'bytes') { FLY.bytes[d.name] = d.bytes; return; }
   if (d.type === 'grid') {
     grids[d.name] = d;
+    groundVer++;
+    sendGridToAlign(d);
     seatWoodhenge();
     if (d.name !== 'detail') groundChanged();
     return;
@@ -625,6 +796,13 @@ worker.onmessage = (ev) => {
         scene.add(coarse);
         standIn.visible = false;
         loadState.coarse = true; mark('coarse');
+      } else if (d.name === 'far') {
+        // OS Terrain 50 beyond the lidar: drawn under everything else (cells under the wide ground are left out).
+        const far = makeMesh(d.mesh, terrainMat);
+        far.renderOrder = -1;
+        scene.add(far);
+        loadState.far = true; mark('far');
+        paintLoad();
       } else if (d.name === 'near') {
         scene.add(makeMesh(d.mesh, nearMat));
         coverRects.push(d.bbox);
@@ -650,6 +828,29 @@ worker.onmessage = (ev) => {
       river.frustumCulled = false;
       scene.add(river);
       loadState.river = true; mark('river');
+    });
+    return;
+  }
+  if (d.type === 'farRivers') {
+    // Rivers beyond the wide ground (OS Open Rivers): ribbons draped on the far ground, and every river as a
+    // thin line that shows from high up, where the ribbons are narrower than a pixel.
+    addQueue.push(() => {
+      if (d.idx.length) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(d.pos, 3));
+        geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(d.pos.length).map((v, i) => (i % 3 === 1 ? 1 : 0)), 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(d.pos.length), 3, true));
+        geo.setIndex(new THREE.BufferAttribute(d.idx, 1));
+        const m = new THREE.Mesh(geo, riverMat);
+        m.renderOrder = 2; m.frustumCulled = false;
+        scene.add(m);
+      }
+      const lg = new THREE.BufferGeometry();
+      lg.setAttribute('position', new THREE.BufferAttribute(d.line, 3));
+      farRiverLines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x3d9be0 }));
+      farRiverLines.renderOrder = 3; farRiverLines.frustumCulled = false; farRiverLines.visible = false;
+      scene.add(farRiverLines);
+      mark('farRivers');
     });
     return;
   }
@@ -690,6 +891,7 @@ const flight = { pos: new THREE.Vector3(), yaw: 0, pitch: 0, vel: new THREE.Vect
 let baseSpeed = 40, minAgl = 2;
 const keys = new Set();
 const touch = { fwd: 0, turn: 0, up: 0 };
+const pad = { fwd: 0, str: 0, turn: 0, tilt: 0, up: 0, fast: false }; // the on-screen pad (new layout)
 let flyAnim = null, tour = null;
 function lookFrom(pos, target) {
   const d = new THREE.Vector3().subVectors(target, pos);
@@ -728,6 +930,7 @@ function stepFlyAnim(dt) {
   if (u >= 1) { flyAnim = null; if (A.onDone) A.onDone(); }
 }
 function cancelAuto() {
+  restoreFov();
   flyAnim = null;
   if (tour) stopTour();
 }
@@ -747,8 +950,9 @@ function nudgeSpeed(f) {
 
 const FLIGHT_KEYS = new Set(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyF','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']);
 addEventListener('keydown', (ev) => {
+  // Keys belong to a focused slider, text or number box or list (arrows move the slider, not the camera).
   const tg = ev.target;
-  if (tg && ((tg.tagName === 'INPUT' && tg.type === 'number') || tg.tagName === 'SELECT')) return;
+  if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'SELECT' || tg.tagName === 'TEXTAREA' || tg.isContentEditable)) return;
   if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
   if (FLIGHT_KEYS.has(ev.code)) {
     keys.add(ev.code);
@@ -784,6 +988,7 @@ function viewRay(clientX, clientY) {
   _o.copy(ray.ray.origin); _d.copy(ray.ray.direction);
 }
 function startDrag(ev, mode) {
+  restoreFov();
   drag = { id: ev.pointerId, mode, x: ev.clientX, y: ev.clientY, moved: 0, P: null, auto: !!(flyAnim || tour) };
   if (mode === 'grab' || mode === 'orbit') {
     const hit = groundHit(ev.clientX, ev.clientY);
@@ -840,7 +1045,7 @@ canvas.addEventListener('pointerdown', (ev) => {
     touches.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
     canvas.setPointerCapture(ev.pointerId);
     if (touches.size === 1) startDrag(ev, 'grab');
-    else if (touches.size === 2) { drag = null; pinch = pinchState(); }
+    else if (touches.size === 2) { drag = null; canvas.classList.remove('drag'); pinch = pinchState(); }
     return;
   }
   let mode = null;
@@ -867,7 +1072,7 @@ canvas.addEventListener('pointermove', (ev) => {
         const f = o.dist / n.dist; // < 1 when spreading (zoom in)
         const v = flight.pos.clone().sub(hit);
         const len = v.length();
-        const len2 = THREE.MathUtils.clamp(len * f, 8, 12000);
+        const len2 = THREE.MathUtils.clamp(len * f, 8, 60000);
         flight.pos.copy(hit).addScaledVector(v, len2 / Math.max(len, 1e-6));
         let dA = n.ang - o.ang; if (dA > Math.PI) dA -= 2 * Math.PI; if (dA < -Math.PI) dA += 2 * Math.PI;
         orbitAround(hit, -dA, plan ? 0 : (n.my - o.my) * 0.004);
@@ -921,10 +1126,10 @@ function groundHit(clientX, clientY) {
   ray.setFromCamera(ndc, cam);
   const o = ray.ray.origin, d = ray.ray.direction;
   let prev = 0;
-  for (let t = 1; t < 30000; t += Math.max(2, t * 0.01)) {
+  for (let t = 1; t < 120000; t += Math.max(2, t * 0.01)) {
     const x = o.x + d.x * t, y = o.y + d.y * t, z = o.z + d.z * t;
     const h = heightAt(x, z);
-    if (h == null) { if (Math.abs(x) > 6100 || Math.abs(z) > 6100) return null; prev = t; continue; }
+    if (h == null) { if (x < BOUNDS.x0 || x > BOUNDS.x1 || z < BOUNDS.z0 || z > BOUNDS.z1) return null; prev = t; continue; }
     if (y <= h) {
       let lo = prev, hi = t;
       for (let k = 0; k < 12; k++) { const m = (lo + hi) / 2; const hh = heightAt(o.x + d.x * m, o.z + d.z * m); if (hh != null && o.y + d.y * m <= hh) hi = m; else lo = m; }
@@ -981,14 +1186,103 @@ canvas.addEventListener('dblclick', (ev) => {
   }
 }
 
+// ---------------------------------------------------------------- flight pad (new layout)
+// Bottom right, desktop and touch: a round pad (press and hold: forward/back/sideways; drag for an analogue
+// move), a centre ball (drag: turn and tilt, faster the further it is pulled), climb/sink buttons and a x4
+// speed toggle. Each part carries its keyboard key. ?ui=classic (or the Layout buttons) brings back the old
+// help text and touch stick; the pad can be hidden and shown again.
+{
+  const body = document.body, qs = new URLSearchParams(location.search);
+  const setUi = (classic, push) => {
+    body.classList.toggle('ui-classic', classic);
+    document.getElementById('uiNew').classList.toggle('active', !classic);
+    document.getElementById('uiClassic').classList.toggle('active', classic);
+    if (push) { const u = new URL(location.href); if (classic) u.searchParams.set('ui', 'classic'); else u.searchParams.delete('ui'); history.replaceState(null, '', u); }
+  };
+  setUi(qs.get('ui') === 'classic', false);
+  document.getElementById('uiNew').onclick = () => setUi(false, true);
+  document.getElementById('uiClassic').onclick = () => setUi(true, true);
+  let hidden = false; try { hidden = localStorage.getItem('flyover-pad-hidden') === '1'; } catch (e) {}
+  const setHidden = (h) => { body.classList.toggle('joy-hidden', h); try { localStorage.setItem('flyover-pad-hidden', h ? '1' : '0'); } catch (e) {} };
+  setHidden(hidden);
+  document.getElementById('joyHide').onclick = () => setHidden(true);
+  document.getElementById('joyShow').onclick = () => setHidden(false);
+  const joy = document.getElementById('joy'), padEl = document.getElementById('joyPad'), ball = document.getElementById('joyBall'), dot = document.getElementById('joyDot');
+  const R = 58, BR = 34;
+  let mv = null, lk = null;
+  const padVec = (ev) => {
+    const r = padEl.getBoundingClientRect();
+    let dx = ev.clientX - (r.left + r.width / 2), dy = ev.clientY - (r.top + r.height / 2);
+    const l = Math.hypot(dx, dy);
+    if (l > R) { dx *= R / l; dy *= R / l; }
+    return [dx, dy, l];
+  };
+  padEl.addEventListener('pointerdown', (ev) => {
+    if (ev.target === ball) return;
+    ev.preventDefault(); ev.stopPropagation();
+    mv = { id: ev.pointerId, x0: ev.clientX, y0: ev.clientY, drag: false };
+    padEl.setPointerCapture(ev.pointerId); cancelAuto(); joy.classList.add('on');
+    // A press is a full-strength move in the pressed direction (the nearest of the four); dragging makes it analogue.
+    const [dx, dy] = padVec(ev);
+    if (Math.abs(dy) >= Math.abs(dx)) { pad.fwd = dy < 0 ? 1 : -1; pad.str = 0; } else { pad.str = dx > 0 ? 1 : -1; pad.fwd = 0; }
+    dot.style.display = 'block'; dot.style.transform = `translate(${dx}px,${dy}px)`;
+  });
+  padEl.addEventListener('pointermove', (ev) => {
+    if (!mv || ev.pointerId !== mv.id) return;
+    if (!mv.drag && Math.hypot(ev.clientX - mv.x0, ev.clientY - mv.y0) < 6) return;
+    mv.drag = true;
+    const [dx, dy] = padVec(ev);
+    const k = (v) => { const a = Math.abs(v) / R; return Math.sign(v) * (a < 0.12 ? 0 : (a - 0.12) / 0.88); };
+    pad.fwd = -k(dy); pad.str = k(dx);
+    dot.style.transform = `translate(${dx}px,${dy}px)`;
+  });
+  const endMv = (ev) => { if (!mv || ev.pointerId !== mv.id) return; mv = null; pad.fwd = 0; pad.str = 0; dot.style.display = 'none'; joy.classList.remove('on'); };
+  padEl.addEventListener('pointerup', endMv); padEl.addEventListener('pointercancel', endMv); padEl.addEventListener('lostpointercapture', endMv);
+  ball.addEventListener('pointerdown', (ev) => {
+    ev.preventDefault(); ev.stopPropagation();
+    lk = { id: ev.pointerId, x0: ev.clientX, y0: ev.clientY };
+    ball.setPointerCapture(ev.pointerId); cancelAuto(); joy.classList.add('on');
+  });
+  ball.addEventListener('pointermove', (ev) => {
+    if (!lk || ev.pointerId !== lk.id) return;
+    let dx = ev.clientX - lk.x0, dy = ev.clientY - lk.y0;
+    const l = Math.hypot(dx, dy); if (l > BR) { dx *= BR / l; dy *= BR / l; }
+    ball.style.transform = `translate(${dx}px,${dy}px)`;
+    const k = (v) => { const a = Math.abs(v) / BR; return Math.sign(v) * (a < 0.1 ? 0 : (a - 0.1) / 0.9); };
+    pad.turn = k(dx); pad.tilt = -k(dy);
+  });
+  const endLk = (ev) => { if (!lk || ev.pointerId !== lk.id) return; lk = null; pad.turn = 0; pad.tilt = 0; ball.style.transform = ''; joy.classList.remove('on'); };
+  ball.addEventListener('pointerup', endLk); ball.addEventListener('pointercancel', endLk); ball.addEventListener('lostpointercapture', endLk);
+  for (const [id, v] of [['jUp', 1], ['jDown', -1]]) {
+    const b = document.getElementById(id);
+    b.addEventListener('pointerdown', (ev) => { ev.preventDefault(); pad.up = v; b.setPointerCapture(ev.pointerId); b.classList.add('active'); cancelAuto(); });
+    const off = () => { pad.up = 0; b.classList.remove('active'); };
+    b.addEventListener('pointerup', off); b.addEventListener('pointercancel', off); b.addEventListener('lostpointercapture', off);
+  }
+  // Nothing may stay stuck on if the window loses focus mid-press.
+  addEventListener('blur', () => { mv = lk = null; pad.fwd = pad.str = pad.turn = pad.tilt = pad.up = 0; dot.style.display = 'none'; ball.style.transform = ''; joy.classList.remove('on'); });
+  const fastB = document.getElementById('jFast');
+  fastB.onclick = () => { pad.fast = !pad.fast; fastB.classList.toggle('active', pad.fast); };
+  // Keys light the matching part of the pad.
+  const lit = () => { const k = (c) => keys.has(c); fastB.classList.toggle('active', pad.fast || k('ShiftLeft') || k('ShiftRight'));
+    document.getElementById('jUp').classList.toggle('active', pad.up > 0 || k('KeyE') || k('KeyR'));
+    document.getElementById('jDown').classList.toggle('active', pad.up < 0 || k('KeyQ') || k('KeyF')); };
+  addEventListener('keydown', lit); addEventListener('keyup', lit);
+  joy.addEventListener('contextmenu', (ev) => ev.preventDefault());
+  FLY.pad = pad;
+}
+
 function stepFlight(dt) {
   const has = (c) => keys.has(c);
-  const fast = (has('ShiftLeft') || has('ShiftRight')) ? 4 : 1;
-  const sp = baseSpeed * fast;
-  const fwd = (has('KeyW') || has('ArrowUp') ? 1 : 0) - (has('KeyS') || has('ArrowDown') ? 1 : 0) + touch.fwd;
-  const str = (has('KeyD') ? 1 : 0) - (has('KeyA') ? 1 : 0);
-  const turn = (has('ArrowRight') ? 1 : 0) - (has('ArrowLeft') ? 1 : 0) + touch.turn;
-  const up = (has('KeyE') || has('KeyR') ? 1 : 0) - (has('KeyQ') || has('KeyF') ? 1 : 0) + touch.up;
+  const fast = (has('ShiftLeft') || has('ShiftRight') || pad.fast) ? 4 : 1;
+  // Faster high up (keys and pad), so a climb to the 30 km ceiling, or a pan up there, does not take minutes.
+  const gH = heightAt(flight.pos.x, flight.pos.z), aglNow = flight.pos.y - (gH == null ? 0 : gH);
+  const sp = baseSpeed * fast * Math.max(1, aglNow / 400);
+  const fwd = (has('KeyW') || has('ArrowUp') ? 1 : 0) - (has('KeyS') || has('ArrowDown') ? 1 : 0) + touch.fwd + pad.fwd;
+  const str = (has('KeyD') ? 1 : 0) - (has('KeyA') ? 1 : 0) + pad.str;
+  const turn = (has('ArrowRight') ? 1 : 0) - (has('ArrowLeft') ? 1 : 0) + touch.turn + pad.turn;
+  const up = (has('KeyE') || has('KeyR') ? 1 : 0) - (has('KeyQ') || has('KeyF') ? 1 : 0) + touch.up + pad.up;
+  if (pad.tilt) flight.pitch = THREE.MathUtils.clamp(flight.pitch + pad.tilt * 0.9 * dt, -1.52, 1.52);
   const f = new THREE.Vector3(Math.sin(flight.yaw), 0, -Math.cos(flight.yaw));
   const r = new THREE.Vector3(Math.cos(flight.yaw), 0, Math.sin(flight.yaw));
   const target = f.multiplyScalar(fwd * sp).addScaledVector(r, str * sp);
@@ -1001,12 +1295,12 @@ function stepFlight(dt) {
 // Keep inside the map and never below the lowest height above the ground.
 function clampFlight() {
   const p = flight.pos;
-  p.x = THREE.MathUtils.clamp(p.x, -EXTENT, EXTENT);
-  p.z = THREE.MathUtils.clamp(p.z, -EXTENT, EXTENT);
+  p.x = THREE.MathUtils.clamp(p.x, BOUNDS.x0, BOUNDS.x1);
+  p.z = THREE.MathUtils.clamp(p.z, BOUNDS.z0, BOUNDS.z1);
   const g = heightAt(p.x, p.z);
   const floor = (g == null ? -9 : g) + minAgl;
   if (p.y < floor) { p.y = floor; if (flight.vel.y < 0) flight.vel.y = 0; }
-  if (p.y > 4000) { p.y = 4000; if (flight.vel.y > 0) flight.vel.y = 0; }
+  if (p.y > MAX_H) { p.y = MAX_H; if (flight.vel.y > 0) flight.vel.y = 0; }
   return g;
 }
 
@@ -1025,9 +1319,49 @@ function goPlace(key) {
   cancelAuto();
   leavePlan();
   paintPlace(key);
+  if (key === 'bu' && BU_AXIS) {
+    // Eye height (1.6 m) a few metres behind the SW post, looking NE along the post line.
+    if (minAgl > 1.5) { minAgl = 1.5; document.getElementById('minAgl').value = '1.5'; document.getElementById('minLbl').textContent = '1.5 m'; }
+    const bp = buAxisPose('ne');
+    flyTo(bp.pose, { onDone: () => { if (bp.fov) setFov(bp.fov); arrived(); } });
+    return;
+  }
   const s = PLACES[key];
   flyTo(poseAround(s.x, s.z, s), { onDone: arrived });
 }
+// Eye point on the Bulford post axis: AXIS_BACK m behind the near post ('ne': SW of post 8647 looking NE;
+// 'sw': NE of post 9019 looking SW), AXIS_SIDE m to the right so the near post does not hide the far one,
+// 1.6 m above the ground. The view is turned to frame both posts and, if given, the event (grid azimuth);
+// on a narrow screen the field of view is widened just enough to fit them.
+const AXIS_BACK = 4, AXIS_SIDE = 0.8;
+function buAxisPose(end, eventGridAz, eventAlt = 0.5) {
+  const A = BU_AXIS, near = end === 'ne' ? A.a : A.b, far = end === 'ne' ? A.b : A.a, sgn = end === 'ne' ? -1 : 1, side = end === 'ne' ? 1 : -1;
+  const x = near.x + sgn * A.ux * AXIS_BACK - side * A.uz * AXIS_SIDE;
+  const z = near.z + sgn * A.uz * AXIS_BACK + side * A.ux * AXIS_SIDE;
+  const brg = (q) => Math.atan2(q.x - x, -(q.z - z)) / DEG;
+  const lookGrid = (end === 'ne' ? A.az : A.az + 180) - FS.convergenceAt(CE + x, CN - z);
+  const rel = (b) => ((b - lookGrid + 540) % 360) - 180;
+  const nearHalf = Math.atan2(0.35, Math.hypot(near.x - x, near.z - z)) / DEG;
+  const pts = [rel(brg(near)) - nearHalf, rel(brg(near)) + nearHalf, rel(brg(far))];
+  if (eventGridAz != null) pts.push(rel(eventGridAz));
+  const lo = Math.min(...pts), hi = Math.max(...pts), mid = (lo + hi) / 2, span = hi - lo + 10;
+  const gy = groundOr(x, z, 0), eyeY = gy + 1.6;
+  // Vertically: the whole near post (base to top) and the horizon / event.
+  const fN = end === 'ne' ? A.fa : A.fb, hN = end === 'ne' ? A.ha : A.hb, dN = Math.hypot(near.x - x, near.z - z);
+  const topA = Math.atan2(fN.ground - ORIGIN_OD + hN - eyeY, dN) / DEG, botA = Math.atan2(fN.ground - ORIGIN_OD - eyeY, dN) / DEG;
+  const vHi = Math.max(topA, eventAlt + 1), vLo = Math.min(botA, eventAlt - 1), vSpan = vHi - vLo + 6;
+  const hfov = 2 * Math.atan(Math.tan(30 * DEG) * cam.aspect) / DEG;
+  const fovH = span > hfov ? 2 * Math.atan(Math.tan(span / 2 * DEG) / cam.aspect) / DEG : 60;
+  const fovV = Math.max(60, vSpan);
+  const fovNeed = Math.max(fovH, fovV);
+  const fov = fovNeed > 60.5 ? Math.min(100, fovNeed) : null;
+  const pitch = (vHi + vLo) / 2;
+  return { x, z, gy, pose: { pos: new THREE.Vector3(x, eyeY, z), yaw: (lookGrid + mid) * DEG, pitch: pitch * DEG }, fov, nearId: (end === 'ne' ? A.fa : A.fb).id, farId: (end === 'ne' ? A.fb : A.fa).id };
+}
+// A field of view widened for an alignment frame; back to 60 degrees when the user takes over.
+let wideFov = false;
+function setFov(v) { cam.fov = v; cam.updateProjectionMatrix(); wideFov = v !== 60; }
+function restoreFov() { if (wideFov) setFov(60); }
 function arrived() {
   if (document.getElementById('retime').checked && bodyMode !== 'off' && !skyPlay && !manualTime) { pendingSeek = true; autoSeekPending = true; }
 }
@@ -1038,13 +1372,13 @@ document.getElementById('goBU').onclick = () => goPlace('bu');
 // Tour stops as data: target (OSGB E, N), camera distance, grid bearing target to camera, height, hold, caption.
 const TOUR = [
   { en: [412245.35, 142194.11], dist: 5200, fromDeg: 200, up: 1700, look: 30, hold: 4.5, title: 'Chalk between two rivers', date: 'The ground',
-    text: 'Twelve kilometres of Environment Agency lidar ground. The Till runs down the west side, the Avon down the east.' },
+    text: 'Twelve kilometres of Environment Agency lidar ground, with Ordnance Survey Terrain 50 out to the horizon. The Till runs down the west side, the Avon down the east.' },
   { en: [412245.35, 142194.11], dist: 900, fromDeg: 230, up: 210, look: 10, hold: 5, title: 'Stonehenge', date: 'c. 2500 BC',
     text: 'The ditch and bank are older, dug about 3000 BC. The sarsens came five centuries later.' },
   { en: [412245.35, 142194.11], dist: 150, fromDeg: 230, up: 22, look: 6, hold: 5, title: 'Along the axis', date: 'c. 2500 BC',
     text: 'Looking out through the entrance toward the midsummer sunrise.' },
   { en: [410900, 142960], dist: 1500, fromDeg: 200, up: 400, look: 6, hold: 5, title: 'The Greater Cursus', date: 'c. 3500 BC',
-    text: 'Almost three kilometres of bank and ditch running east to west, a thousand years older than Stonehenge. Line from OpenStreetMap.' },
+    text: 'Almost three kilometres of bank and ditch running east to west, a thousand years older than Stonehenge. Outline from Historic England aerial mapping.' },
   { en: [412700, 141300], dist: 1100, fromDeg: 170, up: 280, look: 8, hold: 5, title: 'Barrow cemeteries', date: 'c. 2400 – 1600 BC',
     text: 'Round barrows set along the ridges that overlook Stonehenge. Mounds from Historic England aerial mapping.' },
   { en: [415010, 143721], dist: 900, fromDeg: 200, up: 320, look: 12, hold: 5, title: 'Durrington Walls and Woodhenge', date: 'c. 2500 BC',
@@ -1110,7 +1444,16 @@ function makeDisc(hex, glow) {
 }
 const sunDisc = makeDisc(0xfff6c8, false), sunGlow = makeDisc(0xffc14d, true), moonDisc = makeDisc(0xe8eef8, false);
 
-let epochYear = 2026, doy = 172, minuteUt = 237;
+// 'Modern' is this year (the viewer's clock); years are astronomical (0 = 1 BC, -2499 = 2500 BC).
+const MODERN_YEAR = new Date().getUTCFullYear();
+// A typed year: any whole number, including 0; only an empty or non-numeric entry falls back.
+function parseYear(v, fallback) {
+  const t = String(v == null ? '' : v).trim();
+  if (t === '' || !/^[-+]?\d+(\.\d*)?$/.test(t)) return fallback;
+  const y = Math.trunc(+t);
+  return Number.isFinite(y) ? Math.max(-9999, Math.min(9999, y)) : fallback;
+}
+let epochYear = MODERN_YEAR, doy = 172, minuteUt = 237;
 let bodyMode = 'sunrise', limb = 'first_gleam';
 let skyPlay = false, playEnd = null;
 let pendingSeek = true, autoSeekPending = true, manualTime = false;
@@ -1131,7 +1474,7 @@ function formatClock(min) {
   let ut = String(h).padStart(2, '0') + ':' + String(mm).padStart(2, '0') + ' UT';
   if (dayOver > 0) ut += ' +' + dayOver + 'd';
   if (epochYear >= 1970 && epochYear <= 2100) {
-    try { const uk = Sky.dateFromDoyMinute(epochYear, doy, min).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false }); return uk + ' UK · ' + ut; } catch (e) { /* UT only */ }
+    try { const uk = FS.dateFromDoyMinute(epochYear, doy, min).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false }); return uk + ' UK · ' + ut; } catch (e) { /* UT only */ }
   }
   return ut;
 }
@@ -1147,7 +1490,7 @@ function paintSkyButtons() {
   document.getElementById('btnLimbGleam').classList.toggle('active', limb === 'first_gleam');
   document.getElementById('btnLimbHalf').classList.toggle('active', limb === 'half_orb');
   document.getElementById('btnLimbFull').classList.toggle('active', limb === 'full_orb');
-  document.getElementById('btnEpochModern').classList.toggle('active', epochYear === 2026);
+  document.getElementById('btnEpochModern').classList.toggle('active', epochYear === MODERN_YEAR);
   document.getElementById('btnEpoch2500').classList.toggle('active', epochYear === -2499);
 }
 
@@ -1158,32 +1501,17 @@ function siteForCamera() {
   if (!camSite || Math.hypot(p.x - camSite.x, p.z - camSite.z) > 20 || Math.abs(p.y - camSite.y) > 20) camSite = FS.siteAt(p.x, p.z, p.y);
   return camSite;
 }
-// Rise/set time for someone standing (eye 1.6 m) on the ground at x,z, against the skyline of the loaded ground.
-// Where the ground data stops less than 2.5 km out toward the rise/set point (Bulford is 1 km from the
-// east edge), the skyline there is unknown, so the time comes from the measured Woodhenge skyline
-// (woodhenge/horizon.js), as landscape.html did. The disc is still drawn from the camera.
-const REACH_MIN = 2500;
-const HZ_SKY = (HZ && HZ.alt_deg && HZ.alt_deg.length) ? { alts: HZ.alt_deg, step: HZ.step_deg || 0.25 } : null;
-function seekFrom(x, z, opts) {
-  const gy = heightAt(x, z);
-  if (gy == null) return null;
-  const eye = gy + 1.6;
-  const site = FS.siteAt(x, z, eye);
-  let sky = FS.skylineAt(heightAt, x, z, eye, site.conv);
-  let hit = FS.seekLimbAt(site, Object.assign({ alts: sky.alts, step: sky.step }, opts));
-  let skyline = 'local';
-  if (hit && HZ_SKY && FS.minReach(sky, hit.geoAz, 3) < REACH_MIN) {
-    const hzP = localXZ(HZ.eye.e, HZ.eye.n);
-    const hzSite = FS.siteAt(hzP.x, hzP.z, HZ.eye.ground_od - ORIGIN_OD + (HZ.eye.agl || 1.6));
-    const h2 = FS.seekLimbAt(hzSite, Object.assign({ alts: HZ_SKY.alts, step: HZ_SKY.step }, opts));
-    if (h2) { hit = h2; sky = Object.assign({}, HZ_SKY, { reach: null }); skyline = 'woodhenge'; }
-  }
-  return { site, sky, hit, skyline };
-}
+// Rise/set time for someone standing (eye 1.6 m) on the ground at x,z, against the skyline of the loaded ground
+// (align_core.js; the skyline is cached per eye point). Where the ground data stops less than REACH_MIN out
+// toward the rise/set point, the skyline there is unknown: near Woodhenge the time then comes from the measured
+// Woodhenge skyline (woodhenge/horizon.js), elsewhere it is flagged. The disc is still drawn from the camera.
+function seekFrom(x, z, opts) { return aligner.seekFrom(x, z, opts); }
 function seekHere() {
+  const t0 = performance.now(), made0 = skyStats.made;
   const r = seekFrom(flight.pos.x, flight.pos.z, { body: skyBody(), year: epochYear, doy, rising: bodyMode === 'sunrise' || bodyMode === 'moonrise', limb });
+  FLY.seekMs = performance.now() - t0; FLY.seekNewSkyline = skyStats.made > made0;
   if (!r) return false;
-  lastSeek = { e: r.site.e, n: r.site.n, hit: r.hit, full: FLY.detailDone, skyline: r.skyline };
+  lastSeek = { e: r.site.e, n: r.site.n, hit: r.hit, full: FLY.detailDone, skyline: r.skyline, reach: r.reach, short: r.short };
   if (r.hit) minuteUt = r.hit.minute;
   if (FLY.detailDone) autoSeekPending = false;
   FLY.lastSeek = r.hit ? { e: r.site.e, n: r.site.n, minute: r.hit.minute, geoAz: r.hit.geoAz, sky: r.hit.sky, full: FLY.detailDone, skyline: r.skyline } : null;
@@ -1195,7 +1523,7 @@ function bodyNow() {
   const key = site.x + ':' + site.z + ':' + site.y + ':' + epochYear + ':' + doy + ':' + minuteUt + ':' + bodyMode;
   if (key !== bodyKey) {
     const body = skyBody();
-    const date = Sky.dateFromDoyMinute(epochYear, doy, minuteUt);
+    const date = FS.dateFromDoyMinute(epochYear, doy, minuteUt);
     const hor = FS.horizontalAt(site, body, date, true);
     const sunHor = body === 'Moon' ? FS.horizontalAt(site, 'Sun', date, true) : hor;
     bodyCache = { body, date, hor, sunHor, site, gridAz: hor.az - site.conv };
@@ -1265,15 +1593,25 @@ function placeSky() {
     const what = bodyMode.endsWith('rise') ? 'Rise' : 'Set';
     txt += lastSeek.skyline === 'woodhenge'
       ? ' ' + what + ' timed on the Woodhenge skyline: the map ends too close to E ' + Math.round(lastSeek.e) + ' N ' + Math.round(lastSeek.n) + ' in that direction.'
-      : ' ' + what + ' timed on the skyline at E ' + Math.round(lastSeek.e) + ' N ' + Math.round(lastSeek.n) + (lastSeek.full ? '' : ' (coarse ground)') + '.';
+      : ' ' + what + ' timed on the skyline at E ' + Math.round(lastSeek.e) + ' N ' + Math.round(lastSeek.n) + (lastSeek.full ? '' : ' (coarse ground)') +
+        (lastSeek.short ? ' (the map ends ' + (lastSeek.reach / 1000).toFixed(1) + ' km out that way, so the skyline may be too low)' : '') + '.';
   }
   else if (lastSeek && !lastSeek.hit) txt += ' No ' + B.body.toLowerCase() + (bodyMode.endsWith('rise') ? 'rise' : 'set') + ' on this date.';
   if (BU_POSTS_TRUE && PLACES.bu && Math.hypot(flight.pos.x - PLACES.bu.x, flight.pos.z - PLACES.bu.z) < 1500) txt += ' Bulford posts line ' + BU_POSTS_TRUE.true.toFixed(1) + '° true.';
   if (txt !== readout.textContent) readout.textContent = txt;
 }
+// Day arc playback: 'Pause' holds the sky where it is and becomes 'Resume'; any other sky change ends it.
+let skyPaused = false;
+function paintSkyPlay() {
+  const b = document.getElementById('btnSkyPlay');
+  b.textContent = skyPaused ? 'Resume' : 'Pause';
+  b.disabled = !skyPlay && !skyPaused;
+  b.classList.toggle('active', skyPlay);
+}
 function stopDayPlay() {
-  skyPlay = false; playEnd = null;
-  for (const id of ['btnSkyPlay', 'btnDaySun', 'btnDayMoon']) document.getElementById(id).classList.remove('active');
+  skyPlay = false; playEnd = null; skyPaused = false;
+  for (const id of ['btnDaySun', 'btnDayMoon']) document.getElementById(id).classList.remove('active');
+  paintSkyPlay();
 }
 function reseek() { manualTime = false; pendingSeek = bodyMode !== 'off'; autoSeekPending = pendingSeek; }
 function setBodyMode(mode) { stopDayPlay(); bodyMode = mode; reseek(); paintSkyButtons(); }
@@ -1291,7 +1629,7 @@ function startDay(kind) {
   playEnd = set && set.hit ? set.hit.minute + 20 : rise.hit.minute + 16 * 60;
   skyPlay = true; pendingSeek = false; autoSeekPending = false; manualTime = true;
   document.getElementById(kind === 'moon' ? 'btnDayMoon' : 'btnDaySun').classList.add('active');
-  document.getElementById('btnSkyPlay').classList.add('active');
+  skyPaused = false; paintSkyPlay();
   syncUtUi();
 }
 document.getElementById('btnSunOff').onclick = () => setBodyMode('off');
@@ -1302,9 +1640,9 @@ document.getElementById('btnMoonset').onclick = () => setBodyMode('moonset');
 for (const [id, l] of [['btnLimbGleam', 'first_gleam'], ['btnLimbHalf', 'half_orb'], ['btnLimbFull', 'full_orb']]) {
   document.getElementById(id).onclick = () => { limb = l; reseek(); paintSkyButtons(); };
 }
-document.getElementById('btnEpochModern').onclick = () => setEpoch(2026);
+document.getElementById('btnEpochModern').onclick = () => setEpoch(MODERN_YEAR);
 document.getElementById('btnEpoch2500').onclick = () => setEpoch(-2499);
-document.getElementById('epochYear').onchange = (ev) => setEpoch(Math.trunc(+ev.target.value) || 2026);
+document.getElementById('epochYear').onchange = (ev) => setEpoch(parseYear(ev.target.value, epochYear));
 document.getElementById('doy').oninput = (ev) => { doy = +ev.target.value; stopDayPlay(); reseek(); syncUtUi(); };
 document.querySelectorAll('[data-doy]').forEach((b) => {
   b.onclick = () => {
@@ -1319,7 +1657,12 @@ document.querySelectorAll('[data-doy]').forEach((b) => {
 document.getElementById('utMin').oninput = (ev) => { minuteUt = +ev.target.value; stopDayPlay(); pendingSeek = false; autoSeekPending = false; manualTime = true; lastSeek = null; syncUtUi(); };
 document.getElementById('btnDaySun').onclick = () => startDay('sun');
 document.getElementById('btnDayMoon').onclick = () => startDay('moon');
-document.getElementById('btnSkyPlay').onclick = () => { if (skyPlay) stopDayPlay(); };
+document.getElementById('btnSkyPlay').onclick = () => {
+  if (skyPlay) { skyPlay = false; skyPaused = true; }
+  else if (skyPaused && playEnd != null) { skyPaused = false; skyPlay = true; }
+  paintSkyPlay();
+};
+paintSkyPlay();
 
 function updateStars() {
   const note = document.getElementById('starNote');
@@ -1335,11 +1678,18 @@ function updateStars() {
   if (key === starKey && starGeo.getAttribute('position')) return;
   starKey = key;
   const rows = starsAbove(cat.s, epochYear, doy, minuteUt, -0.4);
-  const pos = new Float32Array(rows.length * 3), mag = new Float32Array(rows.length);
+  // One fixed buffer for the whole catalogue, refilled in place: only the stars above the horizon are drawn
+  // (setDrawRange), so playing the sky arc does not make a new buffer on every minute.
+  if (!starGeo.getAttribute('position') || starGeo.getAttribute('position').count < cat.s.length) {
+    starGeo.dispose();
+    starGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cat.s.length * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    starGeo.setAttribute('mag', new THREE.BufferAttribute(new Float32Array(cat.s.length), 1).setUsage(THREE.DynamicDrawUsage));
+  }
+  const pa = starGeo.getAttribute('position'), ma = starGeo.getAttribute('mag'), pos = pa.array, mag = ma.array;
   for (let i = 0; i < rows.length; i++) { pos[i * 3] = rows[i].x * STAR_R; pos[i * 3 + 1] = rows[i].y * STAR_R; pos[i * 3 + 2] = rows[i].z * STAR_R; mag[i] = rows[i].mag; }
-  starGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  starGeo.setAttribute('mag', new THREE.BufferAttribute(mag, 1));
-  starGeo.computeBoundingSphere();
+  pa.needsUpdate = true; ma.needsUpdate = true;
+  starGeo.setDrawRange(0, rows.length);
+  FLY.starCount = rows.length;
   const which = epochYear < 0 ? 'Thuban' : 'Polaris';
   const idx = cat.names && cat.names[which];
   const s = idx == null ? null : cat.s[idx];
@@ -1438,78 +1788,9 @@ const AXES = [
   { site: 'wh', name: 'Woodhenge axis', az: 49.4 }, { site: 'wh', name: 'Woodhenge axis', az: 43.3 }, { site: 'wh', name: 'Woodhenge axis', az: 38.6 },
 ];
 if (BU_POSTS_TRUE) AXES.push({ site: 'bu', name: 'Bulford posts', az: +BU_POSTS_TRUE.true.toFixed(2) });
-const ALIGN_EVENTS = {
-  'sun-ms-rise': { body: 'Sun', kind: 'midsummer', rising: true, label: 'Midsummer sunrise' },
-  'sun-ms-set': { body: 'Sun', kind: 'midsummer', rising: false, label: 'Midsummer sunset' },
-  'sun-mw-rise': { body: 'Sun', kind: 'midwinter', rising: true, label: 'Midwinter sunrise' },
-  'sun-mw-set': { body: 'Sun', kind: 'midwinter', rising: false, label: 'Midwinter sunset' },
-  'sun-eq-rise': { body: 'Sun', kind: 'equinox', rising: true, label: 'Equinox sunrise (March)' },
-  'sun-eq-set': { body: 'Sun', kind: 'equinox', rising: false, label: 'Equinox sunset (March)' },
-};
-for (const [mj, mjn] of [[true, 'major'], [false, 'minor']]) for (const [no, non] of [[true, 'north'], [false, 'south']]) for (const [ri, rin] of [[true, 'rise'], [false, 'set']]) {
-  ALIGN_EVENTS['moon-' + mjn + '-' + non + '-' + rin] = { body: 'Moon', major: mj, north: no, rising: ri,
-    label: 'Moon' + rin + ', ' + mjn + ' standstill, ' + (no ? 'northern' : 'southern') + ' extreme' };
-}
-const MON3 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-function yearLabel(y) { return y <= 0 ? (1 - y) + ' BC (year ' + y + ')' : 'AD ' + y; }
-function dateLabel(d) { return d.getUTCDate() + ' ' + MON3[d.getUTCMonth()] + ' ' + yearLabel(d.getUTCFullYear()); }
 function utLabel(d) { return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0') + ' UT'; }
-// All rise (or set) crossings of the chosen limb within +-30 h of a moment, against one skyline.
-function crossingsAround(site, skyAlts, skyStep, ev, limb, when) {
-  const s0 = FS.doyMinuteOf(new Date(when.getTime() - 30 * 3600e3));
-  const out = [];
-  for (let t = s0.minute, end = s0.minute + 60 * 60, guard = 0; t < end && guard < 12; guard++) {
-    const h = FS.seekLimbAt(site, { body: ev.body, year: s0.year, doy: s0.doy, rising: ev.rising, limb, alts: skyAlts, step: skyStep, notBefore: t });
-    if (!h) { t += 20 * 60; continue; }
-    out.push(h);
-    t = h.minute + 60;
-  }
-  return out;
-}
-function pickCrossing(hits, ev, when) {
-  if (!hits.length) return null;
-  if (ev.body === 'Sun') return hits.reduce((a, b) => Math.abs(b.date - when) < Math.abs(a.date - when) ? b : a);
-  // Moon: the most extreme azimuth (furthest north or south) among the crossings either side of the extreme.
-  const northish = ev.north === ev.rising; // north rise and south set have the smallest azimuths
-  return hits.reduce((a, b) => (northish ? b.geoAz < a.geoAz : b.geoAz > a.geoAz) ? b : a);
-}
-// Event moments depend only on the event and the year: kept, so repeated look-ups (plan-view rays) are quick.
-const eventWhenCache = new Map();
-function eventWhen(ev, year) {
-  const key = (ev.body === 'Sun' ? ev.kind : (ev.major ? 'maj' : 'min') + (ev.north ? 'N' : 'S')) + '|' + year;
-  let w = eventWhenCache.get(key);
-  if (w) return w;
-  if (ev.body === 'Sun') {
-    const when = FS.solarEventDate(year, ev.kind);
-    w = { when, info: (ev.kind === 'equinox' ? 'March equinox ' : ev.kind === 'midsummer' ? 'June solstice ' : 'December solstice ') + dateLabel(when) + ' ' + utLabel(when) };
-  } else {
-    const ss = FS.standstillEpoch(year, ev.major);
-    const ex = FS.moonExtremeNear(ss.date, ev.north);
-    w = { when: ex.date, info: (ev.major ? 'Major' : 'Minor') + ' standstill: mean node at ' + (ev.major ? '0' : '180') + '\u00b0 in ' + ss.yearDecimal.toFixed(2) +
-      '; ' + (ev.north ? 'northern' : 'southern') + ' extreme declination ' + (ex.dec >= 0 ? '+' : '') + ex.dec.toFixed(2) + '\u00b0 on ' + dateLabel(ex.date) + ' ' + utLabel(ex.date) };
-  }
-  eventWhenCache.set(key, w);
-  return w;
-}
-// opts.lazy: trace only the skyline bins the search reads (same values as the full skyline).
-function computeAlignment(x, z, ev, year, limb, opts = {}) {
-  const gy = heightAt(x, z);
-  if (gy == null) return { error: 'No ground data at that point.' };
-  const eye = gy + 1.6, site = FS.siteAt(x, z, eye);
-  const { when, info } = eventWhen(ev, year);
-  let sky = (opts.lazy ? FS.lazySkylineAt : FS.skylineAt)(heightAt, x, z, eye, site.conv);
-  let hit = pickCrossing(crossingsAround(site, sky.alts, sky.step, ev, limb, when), ev, when);
-  let skyline = 'local', obsSite = site;
-  if (hit && HZ_SKY && FS.minReach(sky, hit.geoAz, 3) < REACH_MIN) {
-    // The map ends too close in that direction (Bulford): time it on the measured Woodhenge skyline, as seekFrom does.
-    const hzP = localXZ(HZ.eye.e, HZ.eye.n);
-    const hzSite = FS.siteAt(hzP.x, hzP.z, HZ.eye.ground_od - ORIGIN_OD + (HZ.eye.agl || 1.6));
-    const h2 = pickCrossing(crossingsAround(hzSite, HZ_SKY.alts, HZ_SKY.step, ev, limb, when), ev, when);
-    if (h2) { hit = h2; skyline = 'woodhenge'; obsSite = hzSite; }
-  }
-  if (!hit) return { error: 'No ' + (ev.rising ? 'rise' : 'set') + ' found near ' + dateLabel(when) + '.', info };
-  return { site, obsSite, hit, skyline, info, when, gy };
-}
+// Full alignment search (align_core.js): the event moment, then the limb meeting the skyline from (x, z).
+function computeAlignment(x, z, ev, year, limb) { return aligner.computeAlignment(x, z, ev, year, limb); }
 // Signed offset (event minus axis) from each site axis, taking whichever end of the axis is nearer;
 // only axes within 20 degrees are listed, the chosen site's own first.
 function axisOffsets(trueAz, siteKey) {
@@ -1524,9 +1805,9 @@ function axisOffsets(trueAz, siteKey) {
 const alignEl = document.getElementById('alignOut');
 function alignEpochYear() {
   const m = document.getElementById('alEpoch').value;
-  if (m === 'modern') return 2026;
+  if (m === 'modern') return MODERN_YEAR;
   if (m === 'bc2500') return -2499;
-  return Math.trunc(+document.getElementById('alYear').value) || 2026;
+  return parseYear(document.getElementById('alYear').value, MODERN_YEAR);
 }
 function runAlignment() {
   const key = document.getElementById('alSite').value, evKey = document.getElementById('alEvent').value;
@@ -1536,6 +1817,22 @@ function runAlignment() {
   if (key === 'here') { x = flight.pos.x; z = flight.pos.z; siteName = 'Here (E ' + Math.round(CE + x) + ' N ' + Math.round(CN - z) + ')'; }
   else { const S = ALIGN_SITES[key]; const p = localXZ(S.en[0], S.en[1]); x = p.x; z = p.z; siteName = S.name; }
   const t0 = performance.now();
+  // Bulford: stand on the post axis, AXIS_BACK m behind the near post, so both posts are ahead with the event
+  // beyond. The end comes from the event's azimuth (NE events: SW of post 8647 looking NE; SW events: NE of
+  // post 9019 looking SW); 'Swap end' takes the other one. The azimuth is then worked out from that eye point.
+  let axis = null;
+  if (key === 'bu' && BU_AXIS) {
+    const r0 = computeAlignment(x, z, ev, year, limbKey);
+    if (!r0.error) {
+      const dNE = angDiff(r0.hit.geoAz, BU_AXIS.az), dSW = angDiff(r0.hit.geoAz, BU_AXIS.az + 180);
+      let end = Math.abs(dNE) <= Math.abs(dSW) ? 'ne' : 'sw';
+      if (alignSwap) end = end === 'ne' ? 'sw' : 'ne';
+      const bp = buAxisPose(end);
+      x = bp.x; z = bp.z;
+      axis = { end, lookAz: end === 'ne' ? BU_AXIS.az : BU_AXIS.az + 180, nearId: bp.nearId, farId: bp.farId };
+      siteName = 'Bulford post axis';
+    }
+  }
   const r = computeAlignment(x, z, ev, year, limbKey);
   const ms = Math.round(performance.now() - t0);
   if (r.error) { alignEl.textContent = siteName + ': ' + r.error + (r.info ? ' ' + r.info : ''); FLY.align = r; return; }
@@ -1553,24 +1850,48 @@ function runAlignment() {
   // Camera: eye 1.6 m above the ground at the point, facing the event (grid bearing = true - convergence).
   if (minAgl > 1.5) { minAgl = 1.5; document.getElementById('minAgl').value = '1.5'; document.getElementById('minLbl').textContent = '1.5 m'; }
   leavePlan(); cancelAuto(); paintPlace(null);
-  alignActive = { key, x, z, name: siteName }; // plan-view rays now start from this site
+  alignActive = { key, x, z, name: siteName, axis }; // plan-view rays now start from this site (or the axis eye point)
   const gridAz = h.geoAz - r.site.conv;
-  flyTo({ pos: new THREE.Vector3(x, r.gy + 1.6, z), yaw: gridAz * DEG, pitch: (h.sky + 1.2) * DEG });
+  // Face the event; on the post axis, if the event is more than 60 deg off the way the posts lie (after
+  // 'Swap end', say), face along the axis instead so the posts stay in view.
+  if (axis) {
+    // Frame both posts and the event (the event only if it lies within 60 deg of the way the posts run).
+    axis.offset = angDiff(h.geoAz, axis.lookAz);
+    axis.behind = Math.abs(axis.offset) > 60;
+    const bp = buAxisPose(axis.end, axis.behind ? null : gridAz, h.sky);
+    flyTo(bp.pose, { onDone: () => { if (bp.fov) setFov(bp.fov); } });
+    axis.fov = bp.fov;
+  } else flyTo({ pos: new THREE.Vector3(x, r.gy + 1.6, z), yaw: gridAz * DEG, pitch: (h.sky + 1.2) * DEG });
   const uk = (when.year >= 1970 && when.year <= 2100) ? ' (' + d.toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }) + ' UK)' : '';
   const limbName = { first_gleam: 'first gleam', half_orb: 'half orb', full_orb: 'full orb' }[limbKey];
   const offs = axisOffsets(h.geoAz, key);
   const lines = [
     siteName + ' \u00b7 ' + ev.label + ' \u00b7 ' + limbName,
     'True azimuth ' + h.geoAz.toFixed(2) + '\u00b0 (grid ' + gridAz.toFixed(2) + '\u00b0)',
-    'Skyline altitude ' + h.sky.toFixed(2) + '\u00b0 ' + (r.skyline === 'woodhenge' ? '(Woodhenge measured skyline: the map ends too close in this direction)' : '(lidar ground, eye 1.6 m)'),
+    'Skyline altitude ' + h.sky.toFixed(2) + '\u00b0 ' + (r.skyline === 'woodhenge' ? '(Woodhenge measured skyline: the map ends too close in this direction)'
+      : '(eye 1.6 m; lidar ground to about 6 km, OS Terrain 50 beyond' + (r.short ? '; the map ends ' + (r.reach / 1000).toFixed(1) + ' km out this way, so the skyline may be too low' : '') + ')'),
     'Time ' + dateLabel(d) + ', ' + utLabel(d) + uk,
     r.info,
     offs.length ? 'Offset from site axes (event minus axis):' : 'No site axis within 20\u00b0 of this event.',
-    ...offs.map((o) => '  ' + o.a.name + ' ' + (o.back ? (o.a.az + 180).toFixed(1) : o.a.az.toFixed(1)) + '\u00b0: ' + (o.d >= 0 ? '+' : '') + o.d.toFixed(2) + '\u00b0'),
+    ...offs.map((o) => { const nd = o.a.site === 'bu' ? 2 : 1; return '  ' + o.a.name + ' ' + (o.back ? (o.a.az + 180).toFixed(nd) : o.a.az.toFixed(nd)) + '\u00b0: ' + (o.d >= 0 ? '+' : '') + o.d.toFixed(2) + '\u00b0'; }),
   ];
+  if (axis) {
+    const dir = axis.end === 'ne' ? 'SW of post ' + axis.nearId + ', looking NE' : 'NE of post ' + axis.nearId + ', looking SW';
+    lines.splice(1, 0, 'Eye ' + AXIS_BACK + ' m ' + dir + ' along the post axis (post ' + axis.nearId + ' near, ' + axis.farId + ' beyond; ' + AXIS_SIDE + ' m to the right so the far post shows beside the near one), E ' + Math.round(CE + x) + ' N ' + Math.round(CN - z),
+      'Event minus post axis ' + axis.lookAz.toFixed(2) + '\u00b0: ' + (axis.offset >= 0 ? '+' : '') + axis.offset.toFixed(2) + '\u00b0' + (axis.behind ? ' (the event is off to the side or behind: framing the posts only)' : '') + (axis.fov ? '; view widened to ' + axis.fov.toFixed(0) + '\u00b0 to fit' : ''));
+  }
   alignEl.textContent = lines.join('\n');
   FLY.align = { site: key, event: evKey, limb: limbKey, epoch: year, trueAz: h.geoAz, gridAz, skyAlt: h.sky, skyline: r.skyline,
-    date: d.toISOString(), year: when.year, doy: when.doy, minute: when.minute, info: r.info, offsets: offs.map((o) => [o.a.name, o.a.az, +o.d.toFixed(3)]), ms };
+    date: d.toISOString(), year: when.year, doy: when.doy, minute: when.minute, info: r.info, offsets: offs.map((o) => [o.a.name, o.a.az, +o.d.toFixed(3)]), ms,
+    eye: { x, z, e: CE + x, n: CN - z, gy: r.gy }, axis: axis && { ...axis, offset: +axis.offset.toFixed(3) } };
+  paintSwap();
+}
+let alignSwap = false;
+function angDiff(a, b) { return ((a - b + 540) % 360) - 180; }
+function paintSwap() {
+  const b = document.getElementById('alSwap'); if (!b) return;
+  b.hidden = document.getElementById('alSite').value !== 'bu';
+  b.classList.toggle('active', alignSwap);
 }
 {
   const selS = document.getElementById('alSite'), selE = document.getElementById('alEvent');
@@ -1580,6 +1901,9 @@ function runAlignment() {
     for (const [k, v] of Object.entries(ALIGN_EVENTS)) selE.add(new Option(v.label, k));
     document.getElementById('alEpoch').onchange = (ev) => { document.getElementById('alYear').style.display = ev.target.value === 'custom' ? '' : 'none'; };
     document.getElementById('alGo').onclick = runAlignment;
+    selS.addEventListener('change', paintSwap); paintSwap();
+    const sw = document.getElementById('alSwap');
+    if (sw) sw.onclick = () => { alignSwap = !alignSwap; paintSwap(); if (alignActive && alignActive.key === 'bu') runAlignment(); };
   }
 }
 
@@ -1618,12 +1942,12 @@ const raySvg = document.getElementById('raySvg'), rayBox = document.getElementBy
 const rayFromEl = document.getElementById('rayFrom'), rayLegendEl = document.getElementById('rayLegend');
 let rayMode = 'one';          // 'off' | 'one' | 'fan'
 let alignActive = null;       // after Go: { key, x, z } (rays start from the alignment site)
-const rayFirst = new Map();   // event|year|limb -> { date, x, z }: the crossing found first (full search)
-let rayState = { key: '', origin: null, results: new Map(), pending: [], year: 2026, limb: 'first_gleam', ev: 'sun-ms-rise' };
+let rayState = { key: '', origin: null, results: new Map(), pending: [], year: MODERN_YEAR, limb: 'first_gleam', ev: 'sun-ms-rise' };
 let rayDrawKey = '';
 const rayStats = FLY.rayStats = { full: 0, quick: 0, updMs: 0, drawMs: 0 };
 function rayOrigin() {
   if (alignActive) {
+    if (alignActive.axis) return { x: alignActive.x, z: alignActive.z, name: alignActive.name, site: true };
     const k = document.getElementById('alSite').value;
     if (k === 'here' || !ALIGN_SITES[k]) return { x: alignActive.x, z: alignActive.z, name: alignActive.name, site: true };
     const S = ALIGN_SITES[k], q = localXZ(S.en[0], S.en[1]);
@@ -1631,30 +1955,35 @@ function rayOrigin() {
   }
   return { x: flight.pos.x, z: flight.pos.z, name: 'view centre', site: false };
 }
-// True azimuth of one event from (x, z): the first time a full alignment search; afterwards the same rise or
-// set is re-timed from this point's own skyline (a short search from 40 min before it), which is far quicker.
-function rayAzimuth(o, evKey, year, limbKey, sky) {
-  const ev = ALIGN_EVENTS[evKey], ck = evKey + '|' + year + '|' + limbKey;
-  let f = rayFirst.get(ck);
-  if (!f || Math.hypot(f.x - o.x, f.z - o.z) > 2500) {
-    rayStats.full++;
-    const r = computeAlignment(o.x, o.z, ev, year, limbKey, { lazy: true });
-    if (r.error) return { error: r.error };
-    rayFirst.set(ck, { date: r.hit.date, x: o.x, z: o.z });
-    return { az: r.hit.geoAz, sky: r.hit.sky, skyline: r.skyline, date: r.hit.date };
-  }
-  rayStats.quick++;
-  const s0 = FS.doyMinuteOf(new Date(f.date.getTime() - 40 * 60e3));
-  const q = { body: ev.body, year: s0.year, doy: s0.doy, rising: ev.rising, limb: limbKey, notBefore: s0.minute };
-  let h = FS.seekLimbAt(sky.site, { ...q, alts: sky.sky.alts, step: sky.sky.step }), skyline = 'local';
-  if (h && HZ_SKY && FS.minReach(sky.sky, h.geoAz, 3) < REACH_MIN) {
-    const hzP = localXZ(HZ.eye.e, HZ.eye.n);
-    const hzSite = FS.siteAt(hzP.x, hzP.z, HZ.eye.ground_od - ORIGIN_OD + (HZ.eye.agl || 1.6));
-    const h2 = FS.seekLimbAt(hzSite, { ...q, alts: HZ_SKY.alts, step: HZ_SKY.step });
-    if (h2) { h = h2; skyline = 'woodhenge'; }
-  }
-  if (!h) { rayFirst.delete(ck); return rayAzimuth(o, evKey, year, limbKey, sky); }
-  return { az: h.geoAz, sky: h.sky, skyline, date: h.date };
+// Ray azimuths come from align_worker.js (same align_core.js searches as the Alignment check), so the fan of 14
+// events never blocks the page. Each result arrives on its own; a newer request replaces the one in progress.
+// If module workers are not available, the same searches run here, one ray per frame.
+let alignWorker = null, rayReqId = 0;
+try {
+  alignWorker = new Worker(new URL('./align_worker.js?v=' + BUILD, import.meta.url), { type: 'module' });
+  alignWorker.onerror = (e) => { console.warn('align worker failed; rays on the main thread', e.message || e); alignWorker = null; rayState.key = ''; };
+  alignWorker.onmessage = (ev) => {
+    const d = ev.data;
+    if (d.type === 'error') { console.warn('align worker: ' + d.message); alignWorker = null; rayState.key = ''; return; }
+    if (d.id !== rayState.id) return;
+    if (d.type === 'ray') {
+      const w = rayState.want.find((q) => q.k === d.k);
+      rayState.results.set(d.k, { ...d.r, date: d.r.date != null ? new Date(d.r.date) : null, main: w ? w.main : true });
+      rayState.pending = rayState.pending.filter((q) => q.k !== d.k);
+      rayStats.full = d.stats.full; rayStats.quick = d.stats.quick; rayStats.workerMs = (rayStats.workerMs || 0) + d.ms;
+      rayDrawKey = '';
+    } else if (d.type === 'raysDone') rayState.pending = [];
+    publishRays();
+  };
+  alignWorker.postMessage({ type: 'hz', hz: window.WOODHENGE_HORIZON || null });
+} catch (e) { alignWorker = null; }
+function sendGridToAlign(g) {
+  if (alignWorker) alignWorker.postMessage({ type: 'grid', name: g.name, g: { nx: g.nx, ny: g.ny, x0: g.x0, z0: g.z0, dx: g.dx, dz: g.dz, h: g.h } });
+}
+function publishRays() {
+  FLY.rays = { origin: { e: CE + rayState.origin.x, n: CN - rayState.origin.z, name: rayState.origin.name }, mode: rayMode, epoch: rayState.year, limb: rayState.limb,
+    rays: [...rayState.results].map(([k, r]) => ({ k, name: rayName(k), az: r.az, sky: r.sky, skyline: r.skyline, main: r.main })), pending: rayState.pending.length,
+    worker: !!alignWorker };
 }
 function rayWanted() {
   const evKey = document.getElementById('alEvent').value || 'sun-ms-rise';
@@ -1663,7 +1992,8 @@ function rayWanted() {
   if (OPPOSITE[evKey]) out.push({ k: OPPOSITE[evKey], main: false });
   return out;
 }
-// Recompute when the centre moves (by more than 0.3% of the view width), or the event, epoch, limb or mode change.
+// Recompute when the centre moves (by more than 0.3% of the view width), the event, epoch, limb or mode change,
+// or better ground arrives.
 function updateRays(now) {
   if (!plan || rayMode === 'off') return;
   const o = rayOrigin();
@@ -1671,26 +2001,25 @@ function updateRays(now) {
   const tol = Math.max(1, agl * Math.tan(cam.fov * DEG / 2) * 2 * cam.aspect * 0.003);
   const year = alignEpochYear(), limbKey = document.getElementById('alLimb').value;
   const want = rayWanted();
-  const key = rayMode + '|' + year + '|' + limbKey + '|' + want.map((w) => w.k).join(',') + '|' + o.name;
+  const key = rayMode + '|' + year + '|' + limbKey + '|' + want.map((w) => w.k).join(',') + '|' + o.name + '|' + groundVer;
   const moved = !rayState.origin || Math.hypot(o.x - rayState.origin.x, o.z - rayState.origin.z) > tol;
   if (key !== rayState.key || moved) {
     if (key !== rayState.key) rayState.results = new Map();
-    const gy = heightAt(o.x, o.z);
-    if (gy == null) return;
-    const site = FS.siteAt(o.x, o.z, gy + 1.6);
-    rayState = { key, origin: o, results: rayState.results, pending: want.slice(), year, limb: limbKey, want,
-      sky: { site, sky: FS.lazySkylineAt(heightAt, o.x, o.z, gy + 1.6, site.conv) } };
+    if (heightAt(o.x, o.z) == null) return;
+    rayState = { key, origin: o, results: rayState.results, pending: want.slice(), year, limb: limbKey, want, id: ++rayReqId, conv: FS.convergenceAt(CE + o.x, CN - o.z) };
+    if (alignWorker) alignWorker.postMessage({ type: 'rays', id: rayState.id, x: o.x, z: o.z, keys: want.map((w) => w.k), year, limb: limbKey });
+    publishRays();
   }
-  // Work through the list for up to 10 ms a frame.
-  const t0 = performance.now();
-  while (rayState.pending.length && performance.now() - t0 < 10) {
+  if (alignWorker) return;
+  // No worker: one ray per frame here (a full search can take tens of ms).
+  if (rayState.pending.length) {
     const w = rayState.pending.shift();
-    const r = rayAzimuth(rayState.origin, w.k, rayState.year, rayState.limb, rayState.sky);
-    rayState.results.set(w.k, { ...r, main: w.main });
+    const r = aligner.rayAzimuth(rayState.origin.x, rayState.origin.z, w.k, rayState.year, rayState.limb);
+    rayState.results.set(w.k, { ...r, date: r.date != null ? new Date(r.date) : null, main: w.main });
+    rayStats.full = aligner.stats.full; rayStats.quick = aligner.stats.quick;
     rayDrawKey = '';
+    publishRays();
   }
-  FLY.rays = { origin: { e: CE + rayState.origin.x, n: CN - rayState.origin.z, name: rayState.origin.name }, mode: rayMode, epoch: rayState.year, limb: rayState.limb,
-    rays: [...rayState.results].map(([k, r]) => ({ k, name: rayName(k), az: r.az, sky: r.sky, skyline: r.skyline, main: r.main })), pending: rayState.pending.length };
 }
 const SVGNS = 'http://www.w3.org/2000/svg';
 function svgEl(tag, attrs, parent) { const e = document.createElementNS(SVGNS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (parent) parent.appendChild(e); return e; }
@@ -1706,7 +2035,7 @@ function drawRays() {
   if (dk === rayDrawKey) return;
   rayDrawKey = dk;
   while (raySvg.firstChild) raySvg.removeChild(raySvg.firstChild);
-  const o = rayState.origin, conv = rayState.sky.site.conv, oy = groundOr(o.x, o.z, 0);
+  const o = rayState.origin, conv = rayState.conv, oy = groundOr(o.x, o.z, 0);
   const W = innerWidth, H = innerHeight;
   const agl = Math.max(50, flight.pos.y - groundOr(flight.pos.x, flight.pos.z, 0));
   const halfDiag = agl * Math.tan(cam.fov * DEG / 2) * Math.hypot(1, cam.aspect);
@@ -1801,7 +2130,8 @@ setRayMode('one');
 const flightEl = document.getElementById('flight');
 // Compass: turns with the camera heading; N is true north (grid bearing + convergence).
 const compassRose = document.getElementById('compassRose');
-let compassConv = 0.15, compassLast = 1e9;
+// Grid convergence at the camera (true = grid + conv), from the OSGB projection; refreshed with the HUD.
+let compassConv = FS.convergenceAt(CE + flight.pos.x, CN - flight.pos.z), compassLast = 1e9;
 function updateCompass() {
   if (!compassRose) return;
   const hdg = flight.yaw / DEG + compassConv;
@@ -1854,6 +2184,7 @@ function tick(now) {
   const wantNear = THREE.MathUtils.clamp(agl * 0.08, 0.3, 40);
   if (Math.abs(wantNear - cam.near) / cam.near > 0.15) { cam.near = wantNear; cam.updateProjectionMatrix(); }
   riverBias.value = 2 * cam.near * 0.002;
+  if (farRiverLines) farRiverLines.visible = agl > 1500;
   // Detail tiles: the full 10 m grid near the camera, every other point further away.
   for (const t of tiles) {
     const b = t.bbox;
@@ -1901,6 +2232,9 @@ paintPlace('sh');
 setPeriod(NPER - 1);
 if (periodCap) { periodCap.classList.remove('show'); periodCapUntil = 0; }
 paintPlan();
+document.getElementById('epochYear').value = String(MODERN_YEAR);
+document.getElementById('btnEpochModern').title = 'This year (' + MODERN_YEAR + ')';
+{ const o = document.querySelector('#alEpoch option[value="modern"]'); if (o) o.textContent = 'Modern (' + MODERN_YEAR + ')'; }
 paintSkyButtons();
 syncUtUi();
 worker.postMessage({ type: 'start', cam: { x: flight.pos.x, z: flight.pos.z }, early: Object.keys(window.__early || {}) });
@@ -1913,6 +2247,15 @@ addEventListener('resize', () => { cam.aspect = innerWidth / innerHeight; cam.up
 
 // Hooks for checking from the console and tests.
 FLY.api = {
+  // Timber monuments state, for tests.
+  timber() {
+    const whVisible = { all: posts.filter((m) => m.visible).length };
+    for (const k of Object.keys(whRingCount)) whVisible[k] = posts.filter((m) => m.visible && m.userData.ring === k).length;
+    const b = BU ? localXZ(BU.origin_e, BU.origin_n) : null;
+    return { whCount: posts.length, whRingCount, whVisible, whH: postH, whGround: FLY.whPostGround, whCentre: [centre.x, centre.z],
+      buShown: buGroup.visible, buFeatures: buFeat.length, buLabels: buLabels.length, buLabelsVisible: buLabels.filter((l) => l.spr.visible).length, buStacked: buLabels.filter((l) => l.spr.visible && l.spr.center.y < 0).length, labelSprites: labels.length, buOverlap: (() => { const r = buLabels.filter((l) => l.spr.visible).map((l) => { const q = FLY.api.toScreen(l.spr.position.x, l.spr.position.y, l.spr.position.z); if (!q) return null; const f = innerHeight / 2 / Math.tan(cam.fov * DEG / 2), w = l.spr.scale.x * f, h = l.spr.scale.y * f; return { x: q.x, y: q.y + l.spr.center.y * h, w, h }; }).filter(Boolean); let n = 0; for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++) if (Math.abs(r[i].x - r[j].x) < (r[i].w + r[j].w) / 2 - 1 && Math.abs(r[i].y - r[j].y) < (r[i].h + r[j].h) / 2 - 1) n++; return n; })(),
+      buPostH: buFeat.filter((q) => q.h).map((q) => +(q.mesh.scale.y).toFixed(2)), axisH: BU_AXIS && [BU_AXIS.ha, BU_AXIS.hb], buCentre: BU_AXIS ? [(BU_AXIS.a.x + BU_AXIS.b.x) / 2 - 30, (BU_AXIS.a.z + BU_AXIS.b.z) / 2] : b && [b.x, b.z] };
+  },
   heightAt, setPose, poseAround, flyTo, goPlace, seekFrom, localXZ, FS, THREE,
   get flight() { return flight; }, get grids() { return grids; }, get tiles() { return tiles; },
   setSky(o) { if (o.year != null) epochYear = o.year; if (o.doy != null) doy = o.doy; if (o.mode) bodyMode = o.mode; if (o.limb) limb = o.limb; paintSkyButtons(); reseek(); syncUtUi(); },
@@ -1920,6 +2263,11 @@ FLY.api = {
   keys, setPeriod, togglePlan, groundHit, get flying() { return !!(flyAnim || tour); }, runAlignment, computeAlignment, ALIGN_EVENTS, setRayMode, get alignActive() { return alignActive; }, clearAlign() { alignActive = null; }, get plan() { return plan; }, get periodAlpha() { return periodAlpha; },
   // Bearing of the drawn sun/moon disc as seen from the camera, read back from the scene.
   programs() { return renderer.info.programs.map((p) => p.name + ' ' + p.usedTimes); },
+  // Screen position (px) of a world point, and of the drawn sun/moon disc; null when behind the camera.
+  toScreen(x, y, z) { applyCamera(); cam.updateMatrixWorld(); const v = new THREE.Vector3(x, y, z).project(cam); if (v.z > 1) return null; return { x: (v.x + 1) / 2 * innerWidth, y: (1 - v.y) / 2 * innerHeight }; },
+  discScreen() { const d = moonDisc.visible ? moonDisc : sunDisc; if (!d.visible) return null; return FLY.api.toScreen(d.position.x, d.position.y, d.position.z); },
+  get fov() { return cam.fov; },
+  get starAttr() { return starGeo.getAttribute('position'); }, get skyCacheSize() { return skyCache.size; }, get groundVer() { return groundVer; }, get logDepth() { return LOGDEPTH; }, MODERN_YEAR,
   discBearing() {
     const d = (moonDisc.visible ? moonDisc : sunDisc).position.clone().sub(cam.position);
     const grid = (Math.atan2(d.x, -d.z) / DEG + 360) % 360;

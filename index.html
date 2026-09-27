@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+<meta name="flyover-build" content="2026-09-27.1720"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Stonehenge landscape: fly</title>
 <link rel="icon" href="data:,"/>
 <script>
@@ -12,10 +13,11 @@ for (const n of ['coarse.bin', 'near.bin']) {
   window.__early[n] = fetch('./data/flyover/' + n).then(r => { if (!r.ok) throw new Error(n + ' ' + r.status); return r.arrayBuffer(); });
 }
 </script>
-<link rel="modulepreload" href="./vendor/three.module.js"/>
+<link rel="modulepreload" href="./data/flyover/three.module.min.js"/>
 <link rel="modulepreload" href="./vendor/astronomy.esm.js"/>
 <style>
- html,body{margin:0;height:100%;background:#071018;color:#eee;font:13px/1.35 system-ui,sans-serif;overflow:hidden;touch-action:none}
+ html,body{margin:0;height:100%;background:#071018;color:#eee;font:13px/1.35 system-ui,sans-serif;overflow:hidden;touch-action:manipulation}
+ #c,#c canvas{touch-action:none} /* pinch, twist and drag on the 3D view are the flyover's own; the panels can still be page-zoomed */
  #c{position:fixed;inset:0}
  #c canvas{display:block;cursor:grab}
  #c canvas.drag{cursor:grabbing}
@@ -25,6 +27,7 @@ for (const n of ['coarse.bin', 'near.bin']) {
  #hud .top{display:flex;align-items:center;justify-content:space-between;gap:6px}
  #hudToggle{margin:0}
  button,label,input{font:inherit}
+ button:disabled{opacity:.45;cursor:default}
  button{margin:3px 4px 0 0;padding:4px 8px;border:0;border-radius:4px;background:#243044;color:#eee;cursor:pointer}
  button.active{background:#c45c26}
  label.t{display:block;margin:8px 0 2px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;opacity:.75}
@@ -71,6 +74,41 @@ for (const n of ['coarse.bin', 'near.bin']) {
   font-size:13px;opacity:0;transition:opacity .5s;pointer-events:none;white-space:nowrap}
  #periodCap.show{opacity:1}
  #periodCap span{color:#e08a4f}
+ /* Joystick pad (new layout; ?ui=classic hides it and brings back the old stick and help text) */
+ #joy{position:fixed;right:12px;bottom:96px;z-index:5;pointer-events:auto;display:flex;align-items:flex-end;gap:8px;user-select:none;-webkit-user-select:none;touch-action:none;opacity:.72;transition:opacity .2s}
+ #joy:hover,#joy.on{opacity:.95}
+ body.touch #joy{bottom:14px}
+ body.ui-classic #joy,body.joy-hidden #joy{display:none}
+ body:not(.ui-classic) #touch{display:none}
+ #joy .col{display:flex;flex-direction:column;gap:6px;align-items:center}
+ #joy button{margin:0;width:44px;height:36px;padding:0;border-radius:8px;background:rgba(20,30,44,.72);border:1px solid rgba(255,255,255,.18);color:#eee;font-size:15px;position:relative;touch-action:none}
+ #joy button.active{background:#c45c26}
+ #joy kbd,#joyPad kbd{position:absolute;font-size:9px;line-height:1;padding:1px 3px;border-radius:3px;background:rgba(0,0,0,.45);color:#cfd8e3;pointer-events:none}
+ #joy button kbd{right:2px;bottom:2px}
+ #joy *{pointer-events:auto}
+ #joyPad{position:relative;width:136px;height:136px;border-radius:50%;background:radial-gradient(circle,rgba(30,44,62,.55) 0 33%,rgba(20,30,44,.72) 34% 100%);border:1px solid rgba(255,255,255,.2);touch-action:none;cursor:pointer}
+ #joyPad .ar{position:absolute;color:rgba(255,255,255,.55);font-size:12px;pointer-events:none}
+ #joyPad .n{left:50%;top:3px;transform:translateX(-50%)} #joyPad .s{left:50%;bottom:3px;transform:translateX(-50%)}
+ #joyPad .w{top:50%;left:4px;transform:translateY(-50%)} #joyPad .e{top:50%;right:4px;transform:translateY(-50%)}
+ #joyPad .kn{left:50%;top:21px;transform:translateX(-50%)} #joyPad .ks{left:50%;bottom:21px;transform:translateX(-50%)}
+ #joyPad .kw{top:50%;left:21px;transform:translateY(-50%)} #joyPad .ke{top:50%;right:21px;transform:translateY(-50%)}
+ #joyDot{position:absolute;left:50%;top:50%;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;background:rgba(224,120,60,.9);box-shadow:0 0 10px rgba(224,120,60,.8);pointer-events:none;display:none}
+ #joyBall{position:absolute;left:50%;top:50%;width:40px;height:40px;margin:-20px 0 0 -20px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#8fa6bf,#3a4c62);border:1px solid rgba(255,255,255,.35);touch-action:none;cursor:grab;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+ #joyBall span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:#eef;pointer-events:none;letter-spacing:.02em}
+ #joyHide{width:20px!important;height:20px!important;font-size:12px!important;border-radius:50%!important;align-self:flex-start}
+ #joyShow{display:none;position:fixed;right:12px;bottom:96px;z-index:3;margin:0;padding:3px 8px;font-size:11px;opacity:.7}
+ body.touch #joyShow{bottom:14px}
+ body.joy-hidden:not(.ui-classic) #joyShow{display:block}
+ body.ui-classic .note.modern,body:not(.ui-classic) .note.classic{display:none}
+ @media (max-width:700px){ body.touch:not(.ui-classic):not(.joy-hidden) #credits{left:8px;transform:none;text-align:left;max-width:calc(100% - 230px)} }
+ #uiRow{margin-top:6px;font-size:11px;opacity:.85}
+ #uiRow button{padding:2px 7px;font-size:11px}
+ #timber{margin-top:8px}
+ #timber summary{cursor:pointer;font-size:11px;letter-spacing:.04em;text-transform:uppercase;opacity:.85;padding:2px 0}
+ #timber[open] summary{margin-bottom:2px}
+ #whRings{display:flex;flex-wrap:wrap;gap:2px 10px}
+ #whRings label.ring{display:flex;align-items:center;gap:4px;font-size:12px}
+ #whRings .sw{display:inline-block;width:10px;height:10px;border-radius:2px}
  .ticks{display:flex;justify-content:space-between;font-size:10px;opacity:.65;margin-top:-2px}
 </style>
 </head>
@@ -79,7 +117,9 @@ for (const n of ['coarse.bin', 'near.bin']) {
 <div id="hud">
   <div class="top"><b>Stonehenge landscape</b><button type="button" id="hudToggle">Controls</button></div>
   <div class="body">
-  <div class="note">Fly anywhere. <kbd>W</kbd><kbd>S</kbd>/<kbd>↑</kbd><kbd>↓</kbd> forward and back, <kbd>A</kbd><kbd>D</kbd> sideways, <kbd>←</kbd><kbd>→</kbd> turn, <kbd>E</kbd>/<kbd>R</kbd> up, <kbd>Q</kbd>/<kbd>F</kbd> down, <kbd>Shift</kbd> faster, <kbd>L</kbd> labels, <kbd>P</kbd> plan view (with alignment rays).<br>Mouse: left-drag grabs and moves the landscape, right-drag (or <kbd>Ctrl</kbd>/<kbd>Alt</kbd>+drag) looks around, middle-drag (or <kbd>Shift</kbd>+right-drag) orbits the grabbed point, wheel moves toward the pointer, double-click flies there. Plan view: drag pans, right-drag turns. Touch: one finger moves the landscape, pinch zooms, twist turns, two-finger drag tilts.</div>
+  <div class="note classic">Fly anywhere. <kbd>W</kbd><kbd>S</kbd>/<kbd>↑</kbd><kbd>↓</kbd> forward and back, <kbd>A</kbd><kbd>D</kbd> sideways, <kbd>←</kbd><kbd>→</kbd> turn, <kbd>E</kbd>/<kbd>R</kbd> up, <kbd>Q</kbd>/<kbd>F</kbd> down, <kbd>Shift</kbd> faster, <kbd>L</kbd> labels, <kbd>P</kbd> plan view (with alignment rays).<br>Mouse: left-drag grabs and moves the landscape, right-drag (or <kbd>Ctrl</kbd>/<kbd>Alt</kbd>+drag) looks around, middle-drag (or <kbd>Shift</kbd>+right-drag) orbits the grabbed point, wheel moves toward the pointer, double-click flies there. Plan view: drag pans, right-drag turns. Touch: one finger moves the landscape, pinch zooms, twist turns, two-finger drag tilts.</div>
+  <div class="note modern" title="Mouse: left-drag grabs and moves the landscape, right-drag (or Ctrl/Alt+drag) looks around, middle-drag (or Shift+right-drag) orbits the grabbed point, wheel moves toward the pointer, double-click flies there. Plan view: drag pans, right-drag turns. Touch: one finger moves the landscape, pinch zooms, twist turns, two-finger drag tilts.">Drag the ground to move it, right-drag to look, wheel to zoom, double-click to fly there. <kbd>L</kbd> labels, <kbd>P</kbd> plan view. The pad (bottom right) flies and shows the keys.</div>
+  <div id="uiRow">Layout: <button type="button" id="uiNew">Pad</button><button type="button" id="uiClassic">Classic</button> <span id="buildStamp" style="opacity:.55;margin-left:4px"></span></div>
   <label class="t">Go to</label>
   <div>
     <button type="button" id="goSH">Stonehenge</button>
@@ -93,6 +133,25 @@ for (const n of ['coarse.bin', 'near.bin']) {
   <input type="range" id="minAgl" min="1" max="60" step="0.5" value="2"/>
   <div class="chk"><label><input type="checkbox" id="labelsOn" checked/> Labels</label></div>
   <div class="chk"><label><input type="checkbox" id="lmOn" checked/> Monuments (Historic England mapping)</label></div>
+  <details id="timber">
+   <summary>Timber monuments</summary>
+   <button type="button" id="whPostsBtn" class="active" aria-pressed="true">Hide Woodhenge posts</button>
+   <div id="whCtl">
+    <label class="t">Rings</label>
+    <div id="whRings"></div>
+    <label class="t">Post height <span id="whHLbl">7.5 m</span></label>
+    <input type="range" id="whPostH" min="1" max="12" step="0.1" value="7.5" aria-label="Woodhenge post height"/>
+    <div class="note">Heights are conjectural: no posts survive. All posts get the one height set here (7.5 m by default, as on the Woodhenge page). Positions are from Maud Cunnington’s 1929 plan, seated on the concrete markers; posts 0.64 m thick; each stands on the lidar ground at its own spot.</div>
+   </div>
+   <button type="button" id="buPostsBtn" class="active" aria-pressed="true">Hide Bulford posts</button>
+   <div id="buCtl">
+    <div class="chk"><label><input type="checkbox" id="buLabelsOn"/> Hole numbers</label><select id="buLabelMode" disabled aria-label="When to show the hole numbers" style="margin:0"><option value="near">up close</option><option value="all">always</option></select></div>
+    <label class="t">Post height boost <span id="buBoostLbl">1×</span></label>
+    <input type="range" id="buBoost" min="1" max="20" step="1" value="1" aria-label="Bulford post height boost"/>
+    <div class="note" id="buBoostNote" hidden style="color:#f0a060;opacity:1">Exaggerated: posts drawn taller than modelled.</div>
+    <div class="note">Hole numbers are off by default. When on, they show up close or always. Crowded labels stack, and any with no room wait until you come closer. Every feature from bulford-posts-3d: number, kind and ground height (m OD). Posts 8647 and 9019 as modelled there (2.0 and 4.0 m above ground, pits 0.8 m deep); other pit depths are not in the data (that page draws them at a default 0.55 m). Positions digitised from the PAST 113 plan (Harding, Leivers &amp; Silva 2026), not the Wessex GNSS survey.</div>
+   </div>
+  </details>
   <label class="t">Period <span id="periodLbl">all</span></label>
   <input type="range" id="period" min="0" max="4" step="1" value="4" aria-label="Show monuments up to this period"/>
   <div class="ticks"><span>Meso</span><span>E Neo</span><span>L Neo</span><span>EBA</span><span>All</span></div>
@@ -141,7 +200,7 @@ for (const n of ['coarse.bin', 'near.bin']) {
     <select id="alEpoch" aria-label="Epoch"><option value="modern">Modern</option><option value="bc2500" selected>2500 BC</option><option value="custom">Custom year</option></select>
     <input type="number" id="alYear" value="-2499" step="1" aria-label="Custom year (astronomical: -2499 = 2500 BC)" style="width:5.4em;display:none"/>
     <select id="alLimb" aria-label="Limb"><option value="first_gleam">Gleam</option><option value="half_orb">Half orb</option><option value="full_orb">Full orb</option></select>
-    <button type="button" id="alGo">Go</button>
+    <button type="button" id="alGo">Go</button><button type="button" id="alSwap" hidden title="Stand at the other end of the Bulford post axis">Swap end</button>
   </div>
   <div id="alignOut" class="note">Choose a site and an event, then Go: the view drops to eye height (1.6 m) facing the event.</div>
   </div>
@@ -167,6 +226,21 @@ for (const n of ['coarse.bin', 'near.bin']) {
 <div id="periodCap"></div>
 <div id="credits"></div>
 <div id="caption"><h2 id="capTitle"></h2><div class="date" id="capDate"></div><p id="capText"></p></div>
+<div id="joy" aria-label="Flight controls">
+  <button type="button" tabindex="-1" id="joyHide" title="Hide the pad (show it again from the button left behind)">×</button>
+  <div class="col">
+    <button type="button" tabindex="-1" id="jUp" title="Climb (E or R)">▲<kbd>E</kbd></button>
+    <button type="button" tabindex="-1" id="jDown" title="Sink (Q or F)">▼<kbd>Q</kbd></button>
+    <button type="button" tabindex="-1" id="jFast" title="Faster, ×4 (hold Shift)">»<kbd>⇧</kbd></button>
+  </div>
+  <div id="joyPad" title="Press and hold to fly: up forward (W/↑), down back (S/↓), sides sideways (A/D). Drag for a gentler, analogue move. The centre ball turns and tilts the view (←/→ turn).">
+    <span class="ar n">▲</span><span class="ar s">▼</span><span class="ar w">◀</span><span class="ar e">▶</span>
+    <kbd class="kn">W</kbd><kbd class="ks">S</kbd><kbd class="kw">A</kbd><kbd class="ke">D</kbd>
+    <div id="joyDot"></div>
+    <div id="joyBall" title="Drag to turn (←/→) and tilt the view"><span>look</span></div>
+  </div>
+</div>
+<button type="button" id="joyShow" title="Show the flight pad">Show pad</button>
 <div id="touch">
   <div id="stick"><div id="knob"></div></div>
   <div id="updown"><button type="button" id="tUp" aria-label="Up">▲</button><button type="button" id="tDown" aria-label="Down">▼</button></div>
@@ -174,13 +248,14 @@ for (const n of ['coarse.bin', 'near.bin']) {
 <script src="./woodhenge/posts.js"></script>
 <script src="./woodhenge/horizon.js"></script>
 <script src="./data/bulford_sites.js"></script>
+<script src="./data/flyover/bulford_features.js?v=2026-09-27.1720"></script>
 <script src="./data/site_ground_od.js"></script>
 <script src="./data/locked_poses.js"></script>
-<script src="./data/flyover/monuments.js"></script>
+<script src="./data/flyover/monuments.js?v=2026-09-27.1720"></script>
 <script src="./data/bright_stars.js"></script>
 <script type="importmap">
-{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/"}}
+{"imports":{"three":"./data/flyover/three.module.min.js"}}
 </script>
-<script type="module" src="./data/flyover/flyover_main.js"></script>
+<script type="module" src="./data/flyover/flyover_main.js?v=2026-09-27.1720"></script>
 </body>
 </html>
