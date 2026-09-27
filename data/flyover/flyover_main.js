@@ -1,14 +1,14 @@
 // The flyover page (landscape_v2.html; index.html in the public repo): free flight over the Stonehenge, Woodhenge and Bulford landscape.
 import * as THREE from 'three';
-import * as FS from './flyover_sky.js?v=2026-09-27.1835';
-import * as Sky from '../../skyscape_sky.js?v=2026-09-27.1835';
-import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-27.1835';
+import * as FS from './flyover_sky.js?v=2026-09-27.1900';
+import * as Sky from '../../skyscape_sky.js?v=2026-09-27.1900';
+import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-27.1900';
 const { starHorizontal, starsAbove } = FS; // stars from flyover_sky (dates right for years 0-99)
 
 // ---------------------------------------------------------------- basics
 const FLY = window.__fly = { marks: {}, detailDone: false, bytes: {} };
 // Build stamp: the page's <meta name="flyover-build"> must match, or the browser is running cached old code.
-const BUILD = '2026-09-27.1835';
+const BUILD = '2026-09-27.1900';
 FLY.build = BUILD;
 {
   const want = document.querySelector('meta[name="flyover-build"]');
@@ -57,8 +57,12 @@ scene.add(hemi);
 const sunLight = new THREE.DirectionalLight(0xffe2a8, 1.35);
 sunLight.castShadow = true;
 sunLight.shadow.mapSize.set(2048, 2048);
-Object.assign(sunLight.shadow.camera, { near: 10, far: 2400, left: -160, right: 160, top: 160, bottom: -160 });
-sunLight.shadow.bias = -0.0004;
+// The light sits 1000 m from the focus, so a 500-1500 m depth range is enough. The old 10-2400 m range with
+// bias -0.0004 shifted every shadow about 1 m away from its object (much more on the ground with a low sun),
+// so stones and posts looked as if they floated. Small depth bias plus a little normal bias keeps them touching.
+Object.assign(sunLight.shadow.camera, { near: 500, far: 1500, left: -160, right: 160, top: 160, bottom: -160 });
+sunLight.shadow.bias = -0.00003;
+sunLight.shadow.normalBias = 0.04;
 scene.add(sunLight);
 scene.add(sunLight.target);
 
