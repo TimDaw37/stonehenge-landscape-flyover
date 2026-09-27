@@ -1,0 +1,36 @@
+Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
+
+Copyright (c) 2026 Tim Daw
+
+The HTML, JavaScript, data compilation, derived terrain and monument
+packaging and documentation in this repository are offered under Creative
+Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0) so the
+viewer can be forked and extended with credit to Tim Daw.
+
+You are free to share and adapt the material for any purpose, even
+commercially, under the following terms:
+  - Attribution — You must give appropriate credit, provide a link to
+    the license, and indicate if changes were made.
+  - ShareAlike — If you remix, transform, or build upon the material,
+    you must distribute your contributions under the same license.
+
+Full legal code: https://creativecommons.org/licenses/by-sa/4.0/legalcode
+
+Third-party data and code keep their own licences:
+  - Environment Agency LIDAR Composite DTM: © Environment Agency,
+    Open Government Licence v3.0.
+  - Historic England National Heritage List for England and the
+    Stonehenge World Heritage Site aerial investigation and mapping:
+    contains Historic England data © Historic England 2026,
+    Open Government Licence v3.0.
+  - OpenStreetMap data: © OpenStreetMap contributors, Open Database
+    Licence (ODbL) 1.0. Derived river and site data remain under ODbL.
+  - three.js (vendor/three.module.js): MIT, © Three.js Authors.
+  - astronomy-engine (vendor/astronomy.esm.js): MIT, © Don Cross.
+
+Open Government Licence: https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/
+ODbL: https://opendatacommons.org/licenses/odbl/1-0/
+
+Positions and archaeological attributions remain those of the cited
+published sources (see README). This is a modelling platform, not a
+finished reconstruction claim.

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+<title>Stonehenge landscape: fly</title>
+<link rel="icon" href="data:,"/>
+<script>
+// Start the small ground files at once, before the big modules, so the first ground is ready early.
+window.__early = {};
+for (const n of ['coarse.bin', 'near.bin']) {
+  window.__early[n] = fetch('./data/flyover/' + n).then(r => { if (!r.ok) throw new Error(n + ' ' + r.status); return r.arrayBuffer(); });
+}
+</script>
+<link rel="modulepreload" href="./vendor/three.module.js"/>
+<link rel="modulepreload" href="./vendor/astronomy.esm.js"/>
+<style>
+ html,body{margin:0;height:100%;background:#071018;color:#eee;font:13px/1.35 system-ui,sans-serif;overflow:hidden;touch-action:none}
+ #c{position:fixed;inset:0}
+ #c canvas{display:block;cursor:grab}
+ #c canvas.drag{cursor:grabbing}
+ #hud{position:fixed;left:10px;top:10px;width:272px;max-height:calc(100% - 20px);overflow:auto;
+  background:rgba(10,16,24,.88);padding:10px 12px;border-radius:8px;z-index:3;box-sizing:border-box}
+ #hud.closed .body{display:none}
+ #hud .top{display:flex;align-items:center;justify-content:space-between;gap:6px}
+ #hudToggle{margin:0}
+ button,label,input{font:inherit}
+ button{margin:3px 4px 0 0;padding:4px 8px;border:0;border-radius:4px;background:#243044;color:#eee;cursor:pointer}
+ button.active{background:#c45c26}
+ label.t{display:block;margin:8px 0 2px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;opacity:.75}
+ .chk{display:flex;align-items:center;gap:6px;margin:3px 0}
+ #readout{margin-top:8px;font-size:12px;line-height:1.4}
+ .note{opacity:.7;font-size:11px;margin-top:6px}
+ input[type=range]{width:100%}
+ kbd{background:#243044;border-radius:3px;padding:0 4px;font-size:11px}
+ #flight{position:fixed;right:10px;bottom:10px;z-index:2;background:rgba(10,16,24,.8);padding:6px 10px;border-radius:6px;
+  font:12px/1.4 ui-monospace,Consolas,monospace;white-space:pre;pointer-events:none}
+ #compass{position:fixed;right:12px;top:40px;z-index:2;width:54px;height:54px;pointer-events:none;opacity:.8}
+ #credits{position:fixed;left:50%;transform:translateX(-50%);bottom:4px;z-index:2;font-size:10px;color:#aab4c0;opacity:.7;pointer-events:none;text-align:center;max-width:60vw}
+ #load{position:fixed;right:10px;top:10px;z-index:2;background:rgba(10,16,24,.75);padding:4px 8px;border-radius:5px;font-size:11px;pointer-events:none}
+ #caption{position:fixed;left:50%;bottom:64px;transform:translateX(-50%);max-width:min(520px,86vw);z-index:2;
+  background:rgba(10,16,24,.88);padding:10px 14px;border-radius:8px;opacity:0;transition:opacity .5s;pointer-events:none}
+ #caption.show{opacity:1}
+ #caption h2{margin:0;font-size:15px}
+ #caption .date{color:#e08a4f;font-size:11px;font-weight:700;letter-spacing:.08em;margin-top:2px}
+ #caption p{margin:6px 0 0;font-size:13px;opacity:.9}
+ #touch{display:none}
+ body.touch #touch{display:block}
+ #stick{position:fixed;left:18px;bottom:78px;width:130px;height:130px;border-radius:50%;background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.25);z-index:2;touch-action:none}
+ #knob{position:absolute;left:43px;top:43px;width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,.35)}
+ #updown{position:fixed;right:18px;bottom:78px;display:flex;flex-direction:column;gap:10px;z-index:2}
+ #updown button{width:58px;height:58px;font-size:22px;border-radius:50%;background:rgba(36,48,68,.8);margin:0;touch-action:none}
+ body.touch #flight{bottom:auto;top:36px;right:10px}
+ select,#alYear{font:inherit;margin-top:3px;padding:4px 6px;border:0;border-radius:4px;background:#243044;color:#eee;max-width:100%}
+ #alignOut{margin-top:6px;font:11px/1.4 ui-monospace,Consolas,monospace;white-space:pre-wrap}
+ #planBtn{position:fixed;right:10px;top:100px;z-index:2;margin:0;padding:5px 9px;background:rgba(36,48,68,.9)}
+ #planBtn.active{background:#c45c26}
+ #raySvg{position:fixed;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
+ #raySvg .rayLbl{font:600 13px system-ui,sans-serif;paint-order:stroke;stroke:rgba(0,0,0,.8);stroke-width:3px;stroke-linejoin:round}
+ #rayBox{position:fixed;right:10px;top:134px;z-index:2;background:rgba(10,16,24,.86);padding:6px 8px;border-radius:6px;font-size:11px;line-height:1.45;max-width:230px}
+ #rayBox .rt{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:3px}
+ #rayBox .rt b{margin-right:auto}
+ #rayBox button{margin:0;padding:2px 7px;font-size:11px}
+ #rayBox button.active{background:#c45c26}
+ #rayFrom{color:#c8d2de}
+ #rayLegend{margin-top:3px}
+ #rayLegend .sw{display:inline-block;width:16px;height:3px;margin:0 6px 3px 0;vertical-align:middle;border-radius:2px}
+ #rayLegend .sw.dash{background:repeating-linear-gradient(90deg,#fff 0 4px,transparent 4px 7px);opacity:.7}
+ #periodCap{position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:2;background:rgba(10,16,24,.85);padding:6px 12px;border-radius:6px;
+  font-size:13px;opacity:0;transition:opacity .5s;pointer-events:none;white-space:nowrap}
+ #periodCap.show{opacity:1}
+ #periodCap span{color:#e08a4f}
+ .ticks{display:flex;justify-content:space-between;font-size:10px;opacity:.65;margin-top:-2px}
+</style>
+</head>
+<body>
+<div id="c"></div>
+<div id="hud">
+  <div class="top"><b>Stonehenge landscape</b><button type="button" id="hudToggle">Controls</button></div>
+  <div class="body">
+  <div class="note">Fly anywhere. <kbd>W</kbd><kbd>S</kbd>/<kbd>↑</kbd><kbd>↓</kbd> forward and back, <kbd>A</kbd><kbd>D</kbd> sideways, <kbd>←</kbd><kbd>→</kbd> turn, <kbd>E</kbd>/<kbd>R</kbd> up, <kbd>Q</kbd>/<kbd>F</kbd> down, <kbd>Shift</kbd> faster, drag to look, wheel moves toward the pointer, double-click flies there, <kbd>L</kbd> labels, <kbd>P</kbd> plan view (with alignment rays).</div>
+  <label class="t">Go to</label>
+  <div>
+    <button type="button" id="goSH">Stonehenge</button>
+    <button type="button" id="goWH">Woodhenge</button>
+    <button type="button" id="goBU">Bulford</button>
+    <button type="button" id="goTour">Tour</button>
+  </div>
+  <label class="t">Speed <span id="spdLbl"></span></label>
+  <input type="range" id="speed" min="0" max="100" step="1" value="50"/>
+  <label class="t">Lowest height above ground <span id="minLbl"></span></label>
+  <input type="range" id="minAgl" min="1" max="60" step="0.5" value="2"/>
+  <div class="chk"><label><input type="checkbox" id="labelsOn" checked/> Labels</label></div>
+  <div class="chk"><label><input type="checkbox" id="lmOn" checked/> Monuments (Historic England mapping)</label></div>
+  <label class="t">Period <span id="periodLbl">all</span></label>
+  <input type="range" id="period" min="0" max="4" step="1" value="4" aria-label="Show monuments up to this period"/>
+  <div class="ticks"><span>Meso</span><span>E Neo</span><span>L Neo</span><span>EBA</span><span>All</span></div>
+  <div class="chk"><label><input type="checkbox" id="retime" checked/> Re-time rise and set at each place</label></div>
+  <label class="t">Sky</label>
+  <div class="row">
+    <button type="button" id="btnSunOff">Off</button>
+    <button type="button" id="btnSunrise" class="active">Sunrise</button>
+    <button type="button" id="btnSunset">Sunset</button>
+    <button type="button" id="btnMoonrise">Moonrise</button>
+    <button type="button" id="btnMoonset">Moonset</button>
+  </div>
+  <label class="t">Limb</label>
+  <div class="row">
+    <button type="button" id="btnLimbGleam" class="active">Gleam</button>
+    <button type="button" id="btnLimbHalf">Half orb</button>
+    <button type="button" id="btnLimbFull">Full orb</button>
+  </div>
+  <div class="chk"><label><input type="checkbox" id="starsOn" checked/> Stars <span id="starNote"></span></label></div>
+  <label class="t">Epoch</label>
+  <div class="row">
+    <button type="button" id="btnEpochModern" class="active">Modern</button>
+    <button type="button" id="btnEpoch2500">2500 BC</button>
+    <input type="number" id="epochYear" value="2026" step="1" aria-label="Year" style="width:5.4em;margin-top:3px;padding:4px 6px;border:0;border-radius:4px;background:#243044;color:#eee"/>
+  </div>
+  <label class="t">Date <span id="doyLbl">21 Jun</span></label>
+  <input type="range" id="doy" min="1" max="365" value="172"/>
+  <div class="row">
+    <button type="button" data-doy="80">21 Mar</button>
+    <button type="button" data-doy="172">21 Jun</button>
+    <button type="button" data-doy="266">23 Sep</button>
+    <button type="button" data-doy="355">21 Dec</button>
+  </div>
+  <label class="t">Time <span id="utLbl">03:57 UT</span></label>
+  <input type="range" id="utMin" min="0" max="2160" step="1" value="237"/>
+  <div class="row">
+    <button type="button" id="btnDaySun">Sun's arc</button>
+    <button type="button" id="btnDayMoon">Moon's arc</button>
+    <button type="button" id="btnSkyPlay">Pause</button>
+  </div>
+  <div id="readout">Loading…</div>
+  <label class="t">Alignment check</label>
+  <select id="alSite" aria-label="Site"></select>
+  <select id="alEvent" aria-label="Event"></select>
+  <div class="row">
+    <select id="alEpoch" aria-label="Epoch"><option value="modern">Modern</option><option value="bc2500" selected>2500 BC</option><option value="custom">Custom year</option></select>
+    <input type="number" id="alYear" value="-2499" step="1" aria-label="Custom year (astronomical: -2499 = 2500 BC)" style="width:5.4em;display:none"/>
+    <select id="alLimb" aria-label="Limb"><option value="first_gleam">Gleam</option><option value="half_orb">Half orb</option><option value="full_orb">Full orb</option></select>
+    <button type="button" id="alGo">Go</button>
+  </div>
+  <div id="alignOut" class="note">Choose a site and an event, then Go: the view drops to eye height (1.6 m) facing the event.</div>
+  </div>
+</div>
+<div id="flight"></div>
+<div id="load">Loading…</div>
+<svg id="compass" viewBox="-30 -30 60 60" aria-label="Compass: N is true north">
+ <circle r="26" fill="rgba(10,16,24,.6)" stroke="rgba(220,230,240,.35)" stroke-width="1"/>
+ <g id="compassRose">
+  <path d="M0,-14 L4.5,-2 L0,-4.5 L-4.5,-2 Z" fill="#e8584a"/>
+  <path d="M0,14 L4.5,2 L0,4.5 L-4.5,2 Z" fill="rgba(220,230,240,.55)"/>
+  <text x="0" y="-19.5" font-size="9" font-weight="700" fill="#fff" text-anchor="middle" dominant-baseline="middle" font-family="system-ui,sans-serif">N</text>
+ </g>
+</svg>
+<svg id="raySvg" aria-hidden="true"></svg>
+<button type="button" id="planBtn" title="Straight-down plan view, north up (P)">Plan view</button>
+<div id="rayBox" hidden>
+ <div class="rt"><b>Alignment rays</b><button type="button" id="rayOff">Off</button><button type="button" id="rayOne" title="The event chosen in the Alignment check panel, with its reverse">Event</button><button type="button" id="rayFan" title="Solstices, equinox and lunar standstills">Fan</button></div>
+ <div id="rayFrom"></div>
+ <button type="button" id="rayCentre" hidden>Use the view centre</button>
+ <div id="rayLegend"></div>
+</div>
+<div id="periodCap"></div>
+<div id="credits"></div>
+<div id="caption"><h2 id="capTitle"></h2><div class="date" id="capDate"></div><p id="capText"></p></div>
+<div id="touch">
+  <div id="stick"><div id="knob"></div></div>
+  <div id="updown"><button type="button" id="tUp" aria-label="Up">▲</button><button type="button" id="tDown" aria-label="Down">▼</button></div>
+</div>
+<script src="./woodhenge/posts.js"></script>
+<script src="./woodhenge/horizon.js"></script>
+<script src="./data/bulford_sites.js"></script>
+<script src="./data/site_ground_od.js"></script>
+<script src="./data/locked_poses.js"></script>
+<script src="./data/flyover/monuments.js"></script>
+<script src="./data/bright_stars.js"></script>
+<script type="importmap">
+{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/"}}
+</script>
+<script type="module" src="./data/flyover/flyover_main.js"></script>
+</body>
+</html>
