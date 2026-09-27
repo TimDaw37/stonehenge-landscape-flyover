@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="flyover-build" content="2026-09-27.1720"/>
+<meta name="flyover-build" content="2026-09-27.1835"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Stonehenge landscape: fly</title>
 <link rel="icon" href="data:,"/>
@@ -21,7 +21,7 @@ for (const n of ['coarse.bin', 'near.bin']) {
  #c{position:fixed;inset:0}
  #c canvas{display:block;cursor:grab}
  #c canvas.drag{cursor:grabbing}
- #hud{position:fixed;left:10px;top:10px;width:272px;max-height:calc(100% - 20px);overflow:auto;
+ #hud{position:fixed;left:10px;top:10px;width:360px;max-width:calc(100% - 20px);max-height:calc(100% - 20px);overflow:auto;
   background:rgba(10,16,24,.88);padding:10px 12px;border-radius:8px;z-index:3;box-sizing:border-box}
  #hud.closed .body{display:none}
  #hud .top{display:flex;align-items:center;justify-content:space-between;gap:6px}
@@ -101,6 +101,17 @@ for (const n of ['coarse.bin', 'near.bin']) {
  body.joy-hidden:not(.ui-classic) #joyShow{display:block}
  body.ui-classic .note.modern,body:not(.ui-classic) .note.classic{display:none}
  @media (max-width:700px){ body.touch:not(.ui-classic):not(.joy-hidden) #credits{left:8px;transform:none;text-align:left;max-width:calc(100% - 230px)} }
+
+ /* Credits: one folded line (desktop) or a small (c) button (phones); tap to open, auto-folds */
+ #credits{pointer-events:auto;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:min(60vw,760px)}
+ #credits::before{content:"\00a9  ";font-weight:600}
+ body.credits-open #credits{white-space:normal;overflow:visible;max-width:min(80vw,760px);opacity:.95;background:rgba(10,14,20,.78);padding:6px 10px;border-radius:6px;z-index:6}
+ #creditsBtn{display:none;position:fixed;left:8px;bottom:8px;z-index:3;margin:0;padding:2px 8px;font-size:11px;opacity:.7}
+ @media (max-width:700px){
+  #credits{display:none}
+  #creditsBtn{display:block}
+  body.credits-open #credits{display:block;left:8px;right:8px;transform:none;max-width:none;bottom:36px;text-align:left}
+ }
  #uiRow{margin-top:6px;font-size:11px;opacity:.85}
  #uiRow button{padding:2px 7px;font-size:11px}
  #timber{margin-top:8px}
@@ -110,18 +121,34 @@ for (const n of ['coarse.bin', 'near.bin']) {
  #whRings label.ring{display:flex;align-items:center;gap:4px;font-size:12px}
  #whRings .sw{display:inline-block;width:10px;height:10px;border-radius:2px}
  .ticks{display:flex;justify-content:space-between;font-size:10px;opacity:.65;margin-top:-2px}
+ /* Tidy panel (2026-09-27): wider panel, flight readout at its foot, plan view and layout under the pad */
+ #hud .row{display:flex;flex-wrap:wrap;align-items:center}
+ #flight{position:static;margin-top:8px;padding:6px 8px;background:rgba(36,48,68,.45);border-radius:6px;font-size:11px}
+ body.touch #flight{top:auto;right:auto}
+ #hud.closed #flight{margin-top:6px}
+ #dock{position:fixed;right:12px;bottom:10px;z-index:5;display:flex;align-items:center;gap:8px;font-size:11px}
+ #dock #planBtn{position:static;margin:0}
+ #uiRow{margin:0;opacity:.8}
+ #uiRow button{margin:0 0 0 3px}
+ #joy{bottom:48px}
+ body.touch #joy{bottom:48px}
+ #joyShow{bottom:48px}
+ body.touch #joyShow{bottom:48px}
+ #rayBox{top:100px}
+ #alDetails.active{background:#c45c26}
+ #alSite,#alEvent{display:block;width:100%}
+ #alignOut.brief .more{display:none}
 </style>
 </head>
 <body>
 <div id="c"></div>
 <div id="hud">
-  <div class="top"><b>Stonehenge landscape</b><button type="button" id="hudToggle">Controls</button></div>
+  <div class="top"><b>Stonehenge landscape <span id="buildStamp" style="font-weight:400;font-size:10px;opacity:.5;margin-left:4px"></span></b><button type="button" id="hudToggle">Controls</button></div>
   <div class="body">
   <div class="note classic">Fly anywhere. <kbd>W</kbd><kbd>S</kbd>/<kbd>↑</kbd><kbd>↓</kbd> forward and back, <kbd>A</kbd><kbd>D</kbd> sideways, <kbd>←</kbd><kbd>→</kbd> turn, <kbd>E</kbd>/<kbd>R</kbd> up, <kbd>Q</kbd>/<kbd>F</kbd> down, <kbd>Shift</kbd> faster, <kbd>L</kbd> labels, <kbd>P</kbd> plan view (with alignment rays).<br>Mouse: left-drag grabs and moves the landscape, right-drag (or <kbd>Ctrl</kbd>/<kbd>Alt</kbd>+drag) looks around, middle-drag (or <kbd>Shift</kbd>+right-drag) orbits the grabbed point, wheel moves toward the pointer, double-click flies there. Plan view: drag pans, right-drag turns. Touch: one finger moves the landscape, pinch zooms, twist turns, two-finger drag tilts.</div>
   <div class="note modern" title="Mouse: left-drag grabs and moves the landscape, right-drag (or Ctrl/Alt+drag) looks around, middle-drag (or Shift+right-drag) orbits the grabbed point, wheel moves toward the pointer, double-click flies there. Plan view: drag pans, right-drag turns. Touch: one finger moves the landscape, pinch zooms, twist turns, two-finger drag tilts.">Drag the ground to move it, right-drag to look, wheel to zoom, double-click to fly there. <kbd>L</kbd> labels, <kbd>P</kbd> plan view. The pad (bottom right) flies and shows the keys.</div>
-  <div id="uiRow">Layout: <button type="button" id="uiNew">Pad</button><button type="button" id="uiClassic">Classic</button> <span id="buildStamp" style="opacity:.55;margin-left:4px"></span></div>
   <label class="t">Go to</label>
-  <div>
+  <div class="row">
     <button type="button" id="goSH">Stonehenge</button>
     <button type="button" id="goWH">Woodhenge</button>
     <button type="button" id="goBU">Bulford</button>
@@ -129,27 +156,26 @@ for (const n of ['coarse.bin', 'near.bin']) {
   </div>
   <label class="t">Speed <span id="spdLbl"></span></label>
   <input type="range" id="speed" min="0" max="100" step="1" value="50"/>
-  <label class="t">Lowest height above ground <span id="minLbl"></span></label>
-  <input type="range" id="minAgl" min="1" max="60" step="0.5" value="2"/>
+  <div hidden><span id="minLbl"></span><input type="range" id="minAgl" min="1" max="60" step="0.5" value="2"/></div>
   <div class="chk"><label><input type="checkbox" id="labelsOn" checked/> Labels</label></div>
   <div class="chk"><label><input type="checkbox" id="lmOn" checked/> Monuments (Historic England mapping)</label></div>
   <details id="timber">
-   <summary>Timber monuments</summary>
+   <summary>Timber monuments: show and adjust posts</summary>
    <button type="button" id="whPostsBtn" class="active" aria-pressed="true">Hide Woodhenge posts</button>
    <div id="whCtl">
     <label class="t">Rings</label>
     <div id="whRings"></div>
     <label class="t">Post height <span id="whHLbl">7.5 m</span></label>
     <input type="range" id="whPostH" min="1" max="12" step="0.1" value="7.5" aria-label="Woodhenge post height"/>
-    <div class="note">Heights are conjectural: no posts survive. All posts get the one height set here (7.5 m by default, as on the Woodhenge page). Positions are from Maud Cunnington’s 1929 plan, seated on the concrete markers; posts 0.64 m thick; each stands on the lidar ground at its own spot.</div>
+    <div class="note">Posts based on Cunnington’s 1929 plan.</div>
    </div>
    <button type="button" id="buPostsBtn" class="active" aria-pressed="true">Hide Bulford posts</button>
    <div id="buCtl">
     <div class="chk"><label><input type="checkbox" id="buLabelsOn"/> Hole numbers</label><select id="buLabelMode" disabled aria-label="When to show the hole numbers" style="margin:0"><option value="near">up close</option><option value="all">always</option></select></div>
-    <label class="t">Post height boost <span id="buBoostLbl">1×</span></label>
+    <div hidden><label class="t">Post height boost <span id="buBoostLbl">1×</span></label>
     <input type="range" id="buBoost" min="1" max="20" step="1" value="1" aria-label="Bulford post height boost"/>
-    <div class="note" id="buBoostNote" hidden style="color:#f0a060;opacity:1">Exaggerated: posts drawn taller than modelled.</div>
-    <div class="note">Hole numbers are off by default. When on, they show up close or always. Crowded labels stack, and any with no room wait until you come closer. Every feature from bulford-posts-3d: number, kind and ground height (m OD). Posts 8647 and 9019 as modelled there (2.0 and 4.0 m above ground, pits 0.8 m deep); other pit depths are not in the data (that page draws them at a default 0.55 m). Positions digitised from the PAST 113 plan (Harding, Leivers &amp; Silva 2026), not the Wessex GNSS survey.</div>
+    <div class="note" id="buBoostNote" hidden style="color:#f0a060;opacity:1">Exaggerated: posts drawn taller than modelled.</div></div>
+    <div class="note">Positions from the PAST 113 plan (Harding, Leivers &amp; Silva 2026). Post-pits 0.8 m deep: the PAST 113 average for the pair, measuring surface not stated. Posts drawn 1.6 m above ground (a third in the ground): conjecture.</div>
    </div>
   </details>
   <label class="t">Period <span id="periodLbl">all</span></label>
@@ -200,12 +226,12 @@ for (const n of ['coarse.bin', 'near.bin']) {
     <select id="alEpoch" aria-label="Epoch"><option value="modern">Modern</option><option value="bc2500" selected>2500 BC</option><option value="custom">Custom year</option></select>
     <input type="number" id="alYear" value="-2499" step="1" aria-label="Custom year (astronomical: -2499 = 2500 BC)" style="width:5.4em;display:none"/>
     <select id="alLimb" aria-label="Limb"><option value="first_gleam">Gleam</option><option value="half_orb">Half orb</option><option value="full_orb">Full orb</option></select>
-    <button type="button" id="alGo">Go</button><button type="button" id="alSwap" hidden title="Stand at the other end of the Bulford post axis">Swap end</button>
+    <button type="button" id="alGo">Go</button><button type="button" id="alDetails" hidden aria-pressed="false" title="Show or hide the full workings">Details</button><button type="button" id="alSwap" hidden title="Stand at the other end of the Bulford post axis">Swap end</button>
   </div>
   <div id="alignOut" class="note">Choose a site and an event, then Go: the view drops to eye height (1.6 m) facing the event.</div>
   </div>
+  <div id="flight"></div>
 </div>
-<div id="flight"></div>
 <div id="load">Loading…</div>
 <svg id="compass" viewBox="-30 -30 60 60" aria-label="Compass: N is true north">
  <circle r="26" fill="rgba(10,16,24,.6)" stroke="rgba(220,230,240,.35)" stroke-width="1"/>
@@ -216,7 +242,6 @@ for (const n of ['coarse.bin', 'near.bin']) {
  </g>
 </svg>
 <svg id="raySvg" aria-hidden="true"></svg>
-<button type="button" id="planBtn" title="Straight-down plan view, north up (P)">Plan view</button>
 <div id="rayBox" hidden>
  <div class="rt"><b>Alignment rays</b><button type="button" id="rayOff">Off</button><button type="button" id="rayOne" title="The event chosen in the Alignment check panel, with its reverse">Event</button><button type="button" id="rayFan" title="Solstices, equinox and lunar standstills">Fan</button></div>
  <div id="rayFrom"></div>
@@ -224,7 +249,8 @@ for (const n of ['coarse.bin', 'near.bin']) {
  <div id="rayLegend"></div>
 </div>
 <div id="periodCap"></div>
-<div id="credits"></div>
+<div id="credits" title="Data credits (click to show in full)"></div>
+<button type="button" id="creditsBtn" title="Data credits">© Credits</button>
 <div id="caption"><h2 id="capTitle"></h2><div class="date" id="capDate"></div><p id="capText"></p></div>
 <div id="joy" aria-label="Flight controls">
   <button type="button" tabindex="-1" id="joyHide" title="Hide the pad (show it again from the button left behind)">×</button>
@@ -240,6 +266,7 @@ for (const n of ['coarse.bin', 'near.bin']) {
     <div id="joyBall" title="Drag to turn (←/→) and tilt the view"><span>look</span></div>
   </div>
 </div>
+<div id="dock"><button type="button" id="planBtn" title="Straight-down plan view, north up (P)">Plan view</button><span id="uiRow">Layout: <button type="button" id="uiNew">Pad</button><button type="button" id="uiClassic">Classic</button></span></div>
 <button type="button" id="joyShow" title="Show the flight pad">Show pad</button>
 <div id="touch">
   <div id="stick"><div id="knob"></div></div>
@@ -248,14 +275,21 @@ for (const n of ['coarse.bin', 'near.bin']) {
 <script src="./woodhenge/posts.js"></script>
 <script src="./woodhenge/horizon.js"></script>
 <script src="./data/bulford_sites.js"></script>
-<script src="./data/flyover/bulford_features.js?v=2026-09-27.1720"></script>
+<script src="./data/flyover/bulford_features.js?v=2026-09-27.1835"></script>
 <script src="./data/site_ground_od.js"></script>
 <script src="./data/locked_poses.js"></script>
-<script src="./data/flyover/monuments.js?v=2026-09-27.1720"></script>
+<script src="./data/flyover/monuments.js?v=2026-09-27.1835"></script>
 <script src="./data/bright_stars.js"></script>
 <script type="importmap">
 {"imports":{"three":"./data/flyover/three.module.min.js"}}
 </script>
-<script type="module" src="./data/flyover/flyover_main.js?v=2026-09-27.1720"></script>
+<script type="module" src="./data/flyover/flyover_main.js?v=2026-09-27.1835"></script>
+<script>
+(function(){var b=document.body,t=null;function fold(){b.classList.remove('credits-open');clearTimeout(t);}
+function open(){b.classList.add('credits-open');clearTimeout(t);t=setTimeout(fold,12000);}
+function tog(e){e.stopPropagation();b.classList.contains('credits-open')?fold():open();}
+document.getElementById('credits').addEventListener('click',tog);document.getElementById('creditsBtn').addEventListener('click',tog);
+document.addEventListener('pointerdown',function(e){if(b.classList.contains('credits-open')&&!e.target.closest('#credits,#creditsBtn'))fold();});})();
+</script>
 </body>
 </html>

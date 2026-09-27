@@ -1,14 +1,14 @@
 // The flyover page (landscape_v2.html; index.html in the public repo): free flight over the Stonehenge, Woodhenge and Bulford landscape.
 import * as THREE from 'three';
-import * as FS from './flyover_sky.js?v=2026-09-27.1720';
-import * as Sky from '../../skyscape_sky.js';
-import { makeAligner, ALIGN_EVENTS, dateLabel, REACH_MIN } from './align_core.js?v=2026-09-27.1720';
+import * as FS from './flyover_sky.js?v=2026-09-27.1835';
+import * as Sky from '../../skyscape_sky.js?v=2026-09-27.1835';
+import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-27.1835';
 const { starHorizontal, starsAbove } = FS; // stars from flyover_sky (dates right for years 0-99)
 
 // ---------------------------------------------------------------- basics
 const FLY = window.__fly = { marks: {}, detailDone: false, bytes: {} };
 // Build stamp: the page's <meta name="flyover-build"> must match, or the browser is running cached old code.
-const BUILD = '2026-09-27.1720';
+const BUILD = '2026-09-27.1835';
 FLY.build = BUILD;
 {
   const want = document.querySelector('meta[name="flyover-build"]');
@@ -399,7 +399,7 @@ function makeSiteLabels() {
   for (const b of buFeat) {
     const f = b.f, post = f.kind === 'post';
     const dep = post && BU.pit_depth && BU.pit_depth[f.id];
-    const t = f.id + ' ' + (KIND[f.kind] || f.kind) + (post ? ' ' + b.h.toFixed(1) + ' m tall' + (dep ? ', pit ' + dep + ' m deep' : '') : '') + ' \u00b7 ' + f.ground.toFixed(2) + ' m OD';
+    const t = f.id + ' ' + (KIND[f.kind] || f.kind) + (post ? ' ' + b.h.toFixed(1) + ' m tall (Conjecture)' + (dep ? ', pit ' + dep + ' m deep' : '') : '');
     const spr = makeLabel(t, false, post ? 0.15 : 0.125, false, 2);
     const l = { spr, x: b.x, z: b.z, b, post };
     spr.position.set(b.x, buTop(b) + 0.6, b.z);
@@ -782,6 +782,10 @@ worker.onmessage = (ev) => {
     groundVer++;
     sendGridToAlign(d);
     seatWoodhenge();
+    if (d.name === 'far' && FLY.detailDone && !manualTime && document.getElementById('retime').checked && bodyMode !== 'off' && !skyPlay) {
+      // The far ground usually lands after the detail ground: re-time rise/set against the longer skyline.
+      autoSeekPending = true;
+    }
     if (d.name !== 'detail') groundChanged();
     return;
   }
@@ -1788,9 +1792,23 @@ const AXES = [
   { site: 'wh', name: 'Woodhenge axis', az: 49.4 }, { site: 'wh', name: 'Woodhenge axis', az: 43.3 }, { site: 'wh', name: 'Woodhenge axis', az: 38.6 },
 ];
 if (BU_POSTS_TRUE) AXES.push({ site: 'bu', name: 'Bulford posts', az: +BU_POSTS_TRUE.true.toFixed(2) });
-function utLabel(d) { return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0') + ' UT'; }
 // Full alignment search (align_core.js): the event moment, then the limb meeting the skyline from (x, z).
 function computeAlignment(x, z, ev, year, limb) { return aligner.computeAlignment(x, z, ev, year, limb); }
+// Alignment Go runs in align_worker.js when it can (a moon search takes up to a second and would freeze the page);
+// without the worker it runs here. evKey is the ALIGN_EVENTS key.
+const alignWaits = new Map(); let alignReqId = 0;
+function alignAsync(x, z, evKey, year, limb) {
+  if (!alignWorker) return Promise.resolve(computeAlignment(x, z, ALIGN_EVENTS[evKey], year, limb));
+  const id = ++alignReqId;
+  return new Promise((resolve) => {
+    alignWaits.set(id, resolve);
+    alignWorker.postMessage({ type: 'align', id, x, z, ev: evKey, year, limb });
+  });
+}
+function alignWorkerLost() {
+  // Anything still waiting on the worker is answered here instead.
+  for (const [id, res] of alignWaits) { alignWaits.delete(id); res(null); }
+}
 // Signed offset (event minus axis) from each site axis, taking whichever end of the axis is nearer;
 // only axes within 20 degrees are listed, the chosen site's own first.
 function axisOffsets(trueAz, siteKey) {
@@ -1809,7 +1827,17 @@ function alignEpochYear() {
   if (m === 'bc2500') return -2499;
   return parseYear(document.getElementById('alYear').value, MODERN_YEAR);
 }
-function runAlignment() {
+let alignRun = 0, alignDetails = false;
+function paintAlignDetails(have) {
+  const b = document.getElementById('alDetails'); if (!b) return;
+  if (have != null) b.hidden = !have;
+  b.classList.toggle('active', alignDetails); b.setAttribute('aria-pressed', String(alignDetails));
+  alignEl.classList.toggle('brief', !alignDetails);
+  const top = alignEl.firstElementChild; if (top && alignEl.children.length > 1) top.hidden = alignDetails;
+}
+{ const b = document.getElementById('alDetails'); if (b) b.onclick = () => { alignDetails = !alignDetails; paintAlignDetails(); }; }
+async function runAlignment() {
+  const run = ++alignRun;
   const key = document.getElementById('alSite').value, evKey = document.getElementById('alEvent').value;
   const limbKey = document.getElementById('alLimb').value;
   const ev = ALIGN_EVENTS[evKey], year = alignEpochYear();
@@ -1817,12 +1845,15 @@ function runAlignment() {
   if (key === 'here') { x = flight.pos.x; z = flight.pos.z; siteName = 'Here (E ' + Math.round(CE + x) + ' N ' + Math.round(CN - z) + ')'; }
   else { const S = ALIGN_SITES[key]; const p = localXZ(S.en[0], S.en[1]); x = p.x; z = p.z; siteName = S.name; }
   const t0 = performance.now();
+  alignEl.textContent = siteName + ': working\u2026'; paintAlignDetails(false);
+  const ask = async (ax, az) => (await alignAsync(ax, az, evKey, year, limbKey)) || computeAlignment(ax, az, ev, year, limbKey);
   // Bulford: stand on the post axis, AXIS_BACK m behind the near post, so both posts are ahead with the event
   // beyond. The end comes from the event's azimuth (NE events: SW of post 8647 looking NE; SW events: NE of
   // post 9019 looking SW); 'Swap end' takes the other one. The azimuth is then worked out from that eye point.
   let axis = null;
   if (key === 'bu' && BU_AXIS) {
-    const r0 = computeAlignment(x, z, ev, year, limbKey);
+    const r0 = await ask(x, z);
+    if (run !== alignRun) return;
     if (!r0.error) {
       const dNE = angDiff(r0.hit.geoAz, BU_AXIS.az), dSW = angDiff(r0.hit.geoAz, BU_AXIS.az + 180);
       let end = Math.abs(dNE) <= Math.abs(dSW) ? 'ne' : 'sw';
@@ -1833,7 +1864,8 @@ function runAlignment() {
       siteName = 'Bulford post axis';
     }
   }
-  const r = computeAlignment(x, z, ev, year, limbKey);
+  const r = await ask(x, z);
+  if (run !== alignRun) return; // a newer Go replaced this one
   const ms = Math.round(performance.now() - t0);
   if (r.error) { alignEl.textContent = siteName + ': ' + r.error + (r.info ? ' ' + r.info : ''); FLY.align = r; return; }
   const h = r.hit, d = h.date, when = FS.doyMinuteOf(d);
@@ -1880,7 +1912,13 @@ function runAlignment() {
     lines.splice(1, 0, 'Eye ' + AXIS_BACK + ' m ' + dir + ' along the post axis (post ' + axis.nearId + ' near, ' + axis.farId + ' beyond; ' + AXIS_SIDE + ' m to the right so the far post shows beside the near one), E ' + Math.round(CE + x) + ' N ' + Math.round(CN - z),
       'Event minus post axis ' + axis.lookAz.toFixed(2) + '\u00b0: ' + (axis.offset >= 0 ? '+' : '') + axis.offset.toFixed(2) + '\u00b0' + (axis.behind ? ' (the event is off to the side or behind: framing the posts only)' : '') + (axis.fov ? '; view widened to ' + axis.fov.toFixed(0) + '\u00b0 to fit' : ''));
   }
-  alignEl.textContent = lines.join('\n');
+  // Short answer first (what, where it rises or sets, when); the rest behind the Details button.
+  const brief = [lines[0], ...lines.filter((t) => t && (t.startsWith('True azimuth') || t.startsWith('Time ')))];
+  alignEl.textContent = '';
+  const top = document.createElement('div'); top.textContent = brief.join('\n');
+  const more = document.createElement('div'); more.className = 'more'; more.textContent = lines.join('\n');
+  alignEl.append(top, more);
+  paintAlignDetails(true);
   FLY.align = { site: key, event: evKey, limb: limbKey, epoch: year, trueAz: h.geoAz, gridAz, skyAlt: h.sky, skyline: r.skyline,
     date: d.toISOString(), year: when.year, doy: when.doy, minute: when.minute, info: r.info, offsets: offs.map((o) => [o.a.name, o.a.az, +o.d.toFixed(3)]), ms,
     eye: { x, z, e: CE + x, n: CN - z, gy: r.gy }, axis: axis && { ...axis, offset: +axis.offset.toFixed(3) } };
@@ -1961,10 +1999,11 @@ function rayOrigin() {
 let alignWorker = null, rayReqId = 0;
 try {
   alignWorker = new Worker(new URL('./align_worker.js?v=' + BUILD, import.meta.url), { type: 'module' });
-  alignWorker.onerror = (e) => { console.warn('align worker failed; rays on the main thread', e.message || e); alignWorker = null; rayState.key = ''; };
+  alignWorker.onerror = (e) => { console.warn('align worker failed; rays on the main thread', e.message || e); alignWorker = null; rayState.key = ''; alignWorkerLost(); };
   alignWorker.onmessage = (ev) => {
     const d = ev.data;
-    if (d.type === 'error') { console.warn('align worker: ' + d.message); alignWorker = null; rayState.key = ''; return; }
+    if (d.type === 'error') { console.warn('align worker: ' + d.message); alignWorker = null; rayState.key = ''; alignWorkerLost(); return; }
+    if (d.type === 'align') { const res = alignWaits.get(d.id); if (res) { alignWaits.delete(d.id); FLY.alignWorkerMs = d.ms; res(d.r); } return; }
     if (d.id !== rayState.id) return;
     if (d.type === 'ray') {
       const w = rayState.want.find((q) => q.k === d.k);
@@ -2043,7 +2082,7 @@ function drawRays() {
   const [ox, oyS] = toScreen(o.x, oy, o.z);
   // Screen boxes to keep labels off: the panels and buttons over the view.
   const obstacles = [];
-  for (const id of ['hud', 'flight', 'rayBox', 'planBtn', 'compass', 'load', 'credits', 'periodCap', 'caption', 'updown']) {
+  for (const id of ['hud', 'rayBox', 'dock', 'joy', 'compass', 'load', 'credits', 'periodCap', 'caption', 'updown']) {
     const el = document.getElementById(id); if (!el || el.hidden) continue;
     const b = el.getBoundingClientRect(); if (b.width > 0 && b.height > 0 && getComputedStyle(el).display !== 'none' && +getComputedStyle(el).opacity > 0.05) obstacles.push([b.left - 4, b.top - 4, b.right + 4, b.bottom + 4]);
   }

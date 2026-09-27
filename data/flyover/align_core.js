@@ -25,7 +25,8 @@ export function utLabel(d) { return String(d.getUTCHours()).padStart(2, '0') + '
 // 0.9-1.3 deg in rise/set directions at Woodhenge, Durrington and Bulford, at 5 km by up to 0.6 deg, at 10 km by
 // up to 0.2 deg, at 15 km by under 0.1 deg (tested with far.bin). With far.bin every monument has 16 km or more. Near Woodhenge (within HZ_NEAR m) the time then comes from the measured
 // Woodhenge skyline (woodhenge/horizon.js); elsewhere the local skyline is used and flagged as short.
-export const REACH_MIN = 10000, REACH_HALF = 3, HZ_NEAR = 3000;
+// 1500 m covers Woodhenge and Durrington Walls (about 0.5 km from the Woodhenge eye) but not Bulford (about 2.4 km).
+export const REACH_MIN = 10000, REACH_HALF = 3, HZ_NEAR = 1500;
 
 /**
  * opts: FS: the flyover_sky.js module; heightAt(x, z) -> ground y or null; skyline(x, z, eyeY, conv) -> lazy skyline (FS.lazySkylineAt, or a

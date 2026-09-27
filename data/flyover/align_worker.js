@@ -1,5 +1,5 @@
 // Plan-view rays off the main thread: the page posts its ground grids once each ('grid'), then ray requests
-// ('rays': origin, event keys, epoch, limb). Each ray's azimuth is posted back as soon as it is found; a newer
+// ('rays': origin, event keys, epoch, limb), and runs Alignment Go ('align': one computeAlignment). Each ray's azimuth is posted back as soon as it is found; a newer
 // request replaces the one in progress. Same searches as the page's Alignment check (align_core.js).
 // Imports carry the page's build (?v=) so a cached old copy is never mixed with new code.
 const V = new URL(self.location.href).searchParams.get('v') || '';
@@ -61,5 +61,12 @@ function handle(m) {
     if (aligner) aligner.resetRayCache();
     return;
   }
-  if (m.type === 'rays') { current = m.id; run(m); }
+  if (m.type === 'rays') { current = m.id; run(m); return; }
+  if (m.type === 'align') {
+    // Alignment Go: one full search, answered straight away (Dates survive postMessage as Dates).
+    const t0 = performance.now();
+    let r;
+    try { r = ensure().computeAlignment(m.x, m.z, CORE.ALIGN_EVENTS[m.ev], m.year, m.limb); } catch (e) { r = { error: String(e && e.message || e) }; }
+    self.postMessage({ type: 'align', id: m.id, r, ms: performance.now() - t0 });
+  }
 };

@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Static site; this file only lets Node run the checks in tests/ (npm test). Nothing to install.",
+  "scripts": { "test": "node --test tests/" }
+}
