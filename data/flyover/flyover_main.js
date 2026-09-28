@@ -1,15 +1,15 @@
 // The flyover page (landscape_v2.html; index.html in the public repo): free flight over the Stonehenge, Woodhenge and Bulford landscape.
 import * as THREE from 'three';
-import * as FS from './flyover_sky.js?v=2026-09-28.1255';
+import * as FS from './flyover_sky.js?v=2026-09-28.1830-local';
 // Same URL as the import in flyover_sky.js (no ?v=), so both share one module instance.
 import * as Sky from '../../skyscape_sky.js';
-import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-28.1255';
+import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-28.1830-local';
 const { starHorizontal, starsAbove } = FS; // stars from flyover_sky (dates right for years 0-99)
 
 // ---------------------------------------------------------------- basics
 const FLY = window.__fly = { marks: {}, detailDone: false, bytes: {} };
 // Build stamp: the page's <meta name="flyover-build"> must match, or the browser is running cached old code.
-const BUILD = '2026-09-28.1255';
+const BUILD = '2026-09-28.1830-local';
 FLY.build = BUILD;
 {
   const want = document.querySelector('meta[name="flyover-build"]');
@@ -41,18 +41,205 @@ if (isTouch) document.body.classList.add('touch');
 // Logarithmic depth (code review): no artefacts found in side-by-side views (sun and moon at the skyline, river,
 // posts, far ground), and it keeps the 20 km far ground from flickering against the wide ground. ?logdepth=0 turns it off.
 const LOGDEPTH = new URLSearchParams(location.search).get('logdepth') !== '0';
-let renderer;
-try { renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: LOGDEPTH }); }
-catch (err) {
-  // No WebGL (disabled, blocklisted GPU, very old browser): say so instead of leaving 'Loading…' for ever.
-  const l = document.getElementById('load');
-  if (l) { l.textContent = 'This flyover needs WebGL, which this browser or device has turned off.'; l.style.cssText += ';pointer-events:auto;max-width:60vw;white-space:normal;background:#8a2f18;color:#fff'; }
-  throw err;
+// Renderer start-up, hardened (2026-09-28): some Chrome set-ups refuse a context with the preferred attributes
+// (antialias, logarithmic depth, high-performance GPU) but give one without them, so try a ladder of settings and
+// stop at the first that works. Each attempt gets its own canvas so the browser's webglcontextcreationerror
+// statusMessage (the real reason, e.g. 'GPU process was unable to boot' or 'blocklisted') can be caught.
+const glErrors = []; // { attempt, message, status }
+// ---- Graphics quality. Low: no antialias, no shadows, pixel ratio 1, no logarithmic depth (a larger near plane
+// instead), coarser ground sooner. Chosen by ?quality=low|high, else a saved choice ('Use full graphics'), else
+// automatically after a lost GPU context this session, or for software / integrated GPUs and 'major performance
+// caveat' contexts (Chrome's own flag for slow or emulated WebGL).
+const QS = new URLSearchParams(location.search);
+const GL_LOSS_KEY = 'flyover-gl-losses', Q_KEY = 'flyover-quality';
+const ssGet = (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
+const ssSet = (k, v) => { try { sessionStorage.setItem(k, v); } catch (e) {} };
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} };
+let glLosses = +(ssGet(GL_LOSS_KEY) || 0);
+const SOFT_GPU = /SwiftShader|Basic Render|llvmpipe|softpipe|Software/i;
+const WEAK_GPU = /Intel.*(HD|UHD|Iris)|Radeon.*Vega \d+ Graphics|Radeon\(TM\) Graphics|AMD Radeon Graphics|Radeon R[2-7] Graphics/i;
+// One small throwaway context: the GPU name and whether Chrome flags a major performance caveat.
+function quickProbe() {
+  const r = { renderer: '', caveat: false, any: false };
+  const tryCtx = (attrs) => { const c = document.createElement('canvas'); c.width = c.height = 1; let gl = null; try { gl = c.getContext('webgl2', attrs) || c.getContext('webgl', attrs); } catch (e) {} return gl; };
+  let gl = tryCtx({ failIfMajorPerformanceCaveat: true });
+  if (!gl) { gl = tryCtx({}); if (gl) r.caveat = true; }
+  if (!gl) return r;
+  r.any = true;
+  try { const d = gl.getExtension('WEBGL_debug_renderer_info'); r.renderer = String(gl.getParameter(d ? d.UNMASKED_RENDERER_WEBGL : gl.RENDERER)); } catch (e) {}
+  const lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext();
+  return r;
+}
+function pickQuality() {
+  const q = QS.get('quality');
+  if (q === 'low' || q === 'high') return { q, why: 'URL ?quality=' + q };
+  if (glLosses >= 1) return { q: 'low', why: 'the 3D view was interrupted earlier in this session' };
+  if (lsGet(Q_KEY) === 'high') return { q: 'high', why: 'your choice (Use full graphics)' };
+  const p = quickProbe();
+  FLY.gpu = p.renderer;
+  if (p.caveat) return { q: 'low', why: 'the browser reports slow or emulated WebGL' };
+  if (SOFT_GPU.test(p.renderer)) return { q: 'low', why: 'software graphics (' + p.renderer + ')' };
+  if (!isTouch && WEAK_GPU.test(p.renderer)) return { q: 'low', why: 'integrated graphics (' + p.renderer + ')' };
+  return { q: 'high', why: 'default' };
+}
+// ?retry=1 (the 'Try again' button) starts even after repeated losses.
+const CRASH_LOOP = glLosses >= 2 && QS.get('retry') !== '1';
+const QUALITY = CRASH_LOOP ? { q: 'low', why: 'repeated interruptions' } : pickQuality();
+let LOWQ = QUALITY.q === 'low';
+FLY.quality = QUALITY.q; FLY.qualityWhy = QUALITY.why;
+const PR_CAP = () => LOWQ ? 1 : (isTouch ? 1.5 : 2);
+function makeRenderer() {
+  const AA = !LOWQ, LD = LOGDEPTH && !LOWQ;
+  const ladder = [
+    { name: 'a: preferred', opts: { antialias: AA, logarithmicDepthBuffer: LD } },
+    { name: 'b: antialias off', opts: { antialias: false, logarithmicDepthBuffer: LD } },
+    { name: 'c: default GPU, allow slow GPU', opts: { antialias: false, logarithmicDepthBuffer: LD, powerPreference: 'default', failIfMajorPerformanceCaveat: false } },
+    { name: 'd: logarithmic depth off', opts: { antialias: false, logarithmicDepthBuffer: false, powerPreference: 'default', failIfMajorPerformanceCaveat: false } },
+    { name: 'e: low-power GPU', opts: { antialias: false, logarithmicDepthBuffer: false, powerPreference: 'low-power', failIfMajorPerformanceCaveat: false } },
+  ];
+  for (let i = 0; i < ladder.length; i++) {
+    const L = ladder[i], canvas = document.createElement('canvas');
+    let status = '';
+    canvas.addEventListener('webglcontextcreationerror', (e) => { if (e.statusMessage) status = e.statusMessage; }, false);
+    try {
+      const r = new THREE.WebGLRenderer({ ...L.opts, canvas });
+      FLY.rendererAttempt = L.name; FLY.logDepthOn = !!L.opts.logarithmicDepthBuffer;
+      if (i > 0) console.warn('WebGL renderer started on fallback attempt ' + L.name + ' after ' + i + ' failed attempt(s).');
+      else console.info('WebGL renderer started (attempt ' + L.name + ').');
+      return r;
+    } catch (err) {
+      glErrors.push({ attempt: L.name, message: String(err && err.message || err), status });
+    }
+  }
+  return null;
+}
+// What the browser offers, checked on a spare canvas after a failure (and released again).
+function probeWebGL() {
+  const out = { webgl2: false, webgl1: false, renderer: '', vendor: '', status: [] };
+  for (const kind of ['webgl2', 'webgl', 'experimental-webgl']) {
+    const c = document.createElement('canvas');
+    c.addEventListener('webglcontextcreationerror', (e) => { if (e.statusMessage) out.status.push(kind + ': ' + e.statusMessage); }, false);
+    let gl = null;
+    try { gl = c.getContext(kind); } catch (e) { out.status.push(kind + ' threw: ' + e.message); }
+    if (!gl) continue;
+    if (kind === 'webgl2') out.webgl2 = true; else out.webgl1 = true;
+    try {
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      if (dbg && !out.renderer) { out.renderer = String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)); out.vendor = String(gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL)); }
+      else if (!out.renderer) out.renderer = String(gl.getParameter(gl.RENDERER));
+    } catch (e) {}
+    const lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext();
+    if (kind === 'webgl') break; // experimental-webgl adds nothing once webgl works
+  }
+  return out;
+}
+// No renderer at all: a specific, accessible message with what to try, and the captured errors in a disclosure.
+function showNoWebGL(probe) {
+  document.body.classList.add('no-webgl');
+  const l = document.getElementById('load'); if (l) l.textContent = 'No 3D graphics (WebGL)';
+  const box = document.createElement('div');
+  box.id = 'glFail'; box.setAttribute('role', 'alert');
+  const some = probe.webgl1 || probe.webgl2;
+  const crashed = [...glErrors.map((e) => e.status), ...probe.status].some((t) => /crash|unable to boot|blocked|GPU process/i.test(t || ''));
+  const head = crashed ? 'The browser has switched off 3D graphics (WebGL), most likely after its graphics process crashed.'
+    : !some ? 'This flyover needs WebGL (3D graphics), and this browser has it switched off or blocked.'
+    : !probe.webgl2 ? 'This browser offers only the older WebGL 1, and the flyover could not start its 3D view with it.'
+    : 'The browser offers WebGL, but it refused every set of settings the flyover tried.';
+  const isChrome = /Chrome\//.test(navigator.userAgent) && !/Edg\//.test(navigator.userAgent);
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const details = [
+    'Page build: ' + BUILD,
+    'Browser: ' + navigator.userAgent,
+    'WebGL 2: ' + (probe.webgl2 ? 'available' : 'not available') + ' · WebGL 1: ' + (probe.webgl1 ? 'available' : 'not available'),
+    'Graphics: ' + (probe.renderer ? probe.renderer + (probe.vendor ? ' (' + probe.vendor + ')' : '') : 'unknown'),
+    ...glErrors.map((e) => 'Attempt ' + e.attempt + ': ' + e.message + (e.status ? ' [browser: ' + e.status + ']' : '')),
+    ...probe.status.map((t) => 'Probe ' + t),
+  ].join('\n');
+  box.innerHTML =
+    '<h2>3D view could not start</h2>' +
+    '<p>' + esc(head) + '</p>' +
+    '<p>Things to try:</p><ol>' +
+    '<li>' + (isChrome ? 'In Chrome' : 'In Chrome or Edge') + ', open <b>Settings → System</b>, turn on <b>Use graphics acceleration when available</b>, then press <b>Relaunch</b>.</li>' +
+    '<li>Check what the browser reports: type <code id="glGpuUrl">chrome://gpu</code> into the address bar (links to it cannot be clicked from a web page) <button type="button" id="glCopy">Copy</button>. Look for “WebGL: Hardware accelerated”. In Edge the page is <code>edge://gpu</code>.</li>' +
+    '<li>If <code>chrome://gpu</code> says the GPU process crashed or was unable to boot, <b>fully quit Chrome</b>: close every window, and quit it from the Chrome icon in the system tray (by the clock) if it is there, then start it again.</li>' +
+    '<li>Update the graphics driver (for AMD Radeon: AMD Software: Adrenalin Edition from amd.com; Intel or NVIDIA from their sites; or Windows Update), then restart the computer.</li>' +
+    '<li>Or open this page in another browser, such as Microsoft Edge or Firefox.</li>' +
+    '</ol>' +
+    '<details><summary>Technical details</summary><pre id="glDetails">' + esc(details) + '</pre></details>' +
+    '<p><button type="button" id="glReload">Try again (lower quality)</button></p>';
+  document.body.appendChild(box);
+  const copy = document.getElementById('glCopy');
+  copy.onclick = () => {
+    const done = () => { copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy'; }, 2000); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText('chrome://gpu').then(done, () => selectCode());
+    else selectCode();
+  };
+  const selectCode = () => { const r = document.createRange(); r.selectNodeContents(document.getElementById('glGpuUrl')); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); copy.textContent = 'Selected: press Ctrl+C'; };
+  document.getElementById('glReload').onclick = () => { const u = new URL(location.href); u.searchParams.set('quality', 'low'); location.href = u.href; };
+}
+// Shared panel for 'the graphics keep failing' (start-up after repeated losses, or a loss mid-session).
+function showGlPanel(title, text, opts = {}) {
+  let box = document.getElementById('glFail');
+  if (!box) { box = document.createElement('div'); box.id = 'glFail'; box.setAttribute('role', 'alert'); document.body.appendChild(box); }
+  box.innerHTML = '';
+  const h = document.createElement('h2'); h.textContent = title; box.appendChild(h);
+  for (const t of [].concat(text)) { const p = document.createElement('p'); p.textContent = t; box.appendChild(p); }
+  if (opts.advice) {
+    const ol = document.createElement('ol');
+    for (const t of ['Fully quit Chrome (every window, and the Chrome icon in the system tray by the clock), then start it again.',
+      'Update the graphics driver (for AMD Radeon: AMD Software: Adrenalin Edition from amd.com), then restart the computer.',
+      'Or open this page in Microsoft Edge or Firefox.']) { const li = document.createElement('li'); li.textContent = t; ol.appendChild(li); }
+    box.appendChild(ol);
+  }
+  const p = document.createElement('p');
+  const b = document.createElement('button'); b.type = 'button'; b.id = 'glRetry'; b.textContent = 'Try again (lower quality)';
+  b.onclick = () => { const u = new URL(location.href); u.searchParams.set('quality', 'low'); if (glLosses >= 2) u.searchParams.set('retry', '1'); location.href = u.href; };
+  p.appendChild(b); box.appendChild(p);
+  return box;
+}
+function hideGlPanel() { const b = document.getElementById('glFail'); if (b) b.remove(); }
+if (CRASH_LOOP) {
+  document.body.classList.add('no-webgl');
+  const l = document.getElementById('load'); if (l) l.textContent = '3D view paused';
+  showGlPanel('3D view stopped', ['The graphics system has stopped the 3D view ' + glLosses + ' times in this tab, so it has not been started again automatically, to avoid crashing the browser\u2019s graphics.'], { advice: true });
+  console.warn('Flyover not started: ' + glLosses + ' WebGL context losses this session (use Try again, or ?retry=1).');
+  throw new Error('Flyover not started after repeated WebGL context losses');
+}
+let renderer = makeRenderer();
+if (!renderer) {
+  const probe = probeWebGL();
+  FLY.glFail = { errors: glErrors, probe };
+  console.error('WebGL renderer could not be created. ' + glErrors.map((e) => '[' + e.attempt + '] ' + e.message + (e.status ? ' (statusMessage: ' + e.status + ')' : '')).join(' ') +
+    ' | Probe: webgl2=' + probe.webgl2 + ' webgl1=' + probe.webgl1 + ' renderer=' + (probe.renderer || 'unknown') + (probe.status.length ? ' creation errors: ' + probe.status.join('; ') : ''));
+  showNoWebGL(probe);
+  throw new Error('No WebGL renderer: ' + (glErrors[0] ? glErrors[0].message : 'unknown'));
+}
+// The GPU can be reset under the page (driver crash or update, sleep, too many tabs). Stop drawing, count it for
+// this session (sessionStorage), and say so with a 'Try again (lower quality)' button. If the browser gives the
+// context back after a first loss, carry on in low quality; after a second, stay stopped (no crash loops).
+let glDown = false;
+{
+  const cv = renderer.domElement;
+  cv.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    glDown = true; glLosses++; ssSet(GL_LOSS_KEY, String(glLosses)); FLY.contextLost = glLosses;
+    console.warn('WebGL context lost (' + glLosses + ' this session); rendering stopped.');
+    showGlPanel('3D view interrupted', glLosses >= 2
+      ? ['The graphics system has stopped the 3D view again. It will not restart by itself, to avoid crashing the browser\u2019s graphics.']
+      : ['The graphics system stopped the 3D view (the graphics processor was reset). Waiting for the browser to restore it\u2026'], { advice: glLosses >= 2 });
+  }, false);
+  cv.addEventListener('webglcontextrestored', () => {
+    console.info('WebGL context restored (' + glLosses + ' loss(es) this session).');
+    if (glLosses >= 2) return; // stay stopped; the panel offers a reload in low quality
+    setLowQuality(true, 'the 3D view was interrupted');
+    hideGlPanel(); glDown = false;
+  }, false);
 }
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.5 : 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, PR_CAP()));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = !LOWQ;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.getElementById('c').appendChild(renderer.domElement);
 
@@ -64,8 +251,8 @@ cam.rotation.order = 'YXZ';
 const hemi = new THREE.HemisphereLight(0xc9d4e8, 0x3d4a3a, 0.55);
 scene.add(hemi);
 const sunLight = new THREE.DirectionalLight(0xffe2a8, 1.35);
-sunLight.castShadow = true;
-sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.castShadow = !LOWQ;
+sunLight.shadow.mapSize.set(LOWQ ? 1024 : 2048, LOWQ ? 1024 : 2048);
 // The light sits 1000 m from the focus, so a 500-1500 m depth range is enough. The old 10-2400 m range with
 // bias -0.0004 shifted every shadow about 1 m away from its object (much more on the ground with a low sun),
 // so stones and posts looked as if they floated. Small depth bias plus a little normal bias keeps them touching.
@@ -2364,10 +2551,38 @@ const hud = document.getElementById('hud');
   hudBtn.onclick = () => { const closed = hud.classList.toggle('closed'); hudBtn.setAttribute('aria-expanded', String(!closed)); sessionStorage.setItem('fl_hud_open', closed ? '0' : '1'); };
 }
 
+// ---------------------------------------------------------------- graphics quality note
+// A small 'Low-graphics mode' button by the title: says why, and switches to full graphics (reloads).
+function paintQuality() {
+  let b = document.getElementById('qualityBtn');
+  if (!LOWQ) { if (b) b.remove(); return; }
+  if (!b) {
+    b = document.createElement('button'); b.type = 'button'; b.id = 'qualityBtn'; b.textContent = 'Low-graphics mode';
+    b.onclick = () => { lsSet(Q_KEY, 'high'); ssSet(GL_LOSS_KEY, '0'); const u = new URL(location.href); u.searchParams.delete('quality'); u.searchParams.delete('retry'); location.href = u.href; };
+    const top = document.querySelector('#hud .top b'); if (top) top.appendChild(b);
+  }
+  const t = 'Low-graphics mode (' + FLY.qualityWhy + '): no shadows or smoothing, lower resolution. Click to use full graphics (the page reloads).';
+  b.title = t; b.setAttribute('aria-label', t);
+}
+// Switch to low quality in place (after a restored context): shadows off, pixel ratio 1, coarser ground.
+// Antialias and logarithmic depth are fixed when the renderer is made, so they change on the next load.
+function setLowQuality(on, why) {
+  if (!on || LOWQ) return;
+  LOWQ = true; FLY.quality = 'low'; FLY.qualityWhy = why;
+  renderer.shadowMap.enabled = false; sunLight.castShadow = false;
+  scene.traverse((o) => { const m = o.material; if (m) for (const mm of [].concat(m)) mm.needsUpdate = true; });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, PR_CAP())); renderer.setSize(innerWidth, innerHeight);
+  paintQuality();
+}
+paintQuality();
+if (LOWQ) console.info('Low-graphics mode: ' + FLY.qualityWhy + '.');
+
 // ---------------------------------------------------------------- frame loop
 let last = performance.now(), firstFrame = true;
 function tick(now) {
   requestAnimationFrame(tick);
+  if (glDown) { last = now; return; } // context lost: draw nothing until it is back
+  FLY.frames = (FLY.frames || 0) + 1;
   const dt = Math.min(0.1, (now - last) / 1000);
   const realDt = Math.min(0.5, (now - last) / 1000); // fades keep to wall-clock time on slow machines
   last = now;
@@ -2386,7 +2601,8 @@ function tick(now) {
   const g = clampFlight();
   applyCamera();
   const agl = g == null ? 50 : flight.pos.y - g;
-  const wantNear = THREE.MathUtils.clamp(agl * 0.08, 0.3, 40);
+  // Without logarithmic depth (low quality) a larger near plane keeps the far ground from flickering.
+  const wantNear = LOWQ && !renderer.capabilities.logarithmicDepthBuffer ? THREE.MathUtils.clamp(agl * 0.12, 1, 60) : THREE.MathUtils.clamp(agl * 0.08, 0.3, 40);
   if (Math.abs(wantNear - cam.near) / cam.near > 0.15) { cam.near = wantNear; cam.updateProjectionMatrix(); }
   riverBias.value = 2 * cam.near * 0.002;
   if (farRiverLines) farRiverLines.visible = agl > 1500;
@@ -2395,7 +2611,7 @@ function tick(now) {
     const b = t.bbox;
     const dx = Math.max(b[0] - flight.pos.x, 0, flight.pos.x - b[2]);
     const dz = Math.max(b[1] - flight.pos.z, 0, flight.pos.z - b[3]);
-    const lod = Math.hypot(dx, dz, agl * 0.5) < 1800 ? 0 : 1;
+    const lod = Math.hypot(dx, dz, agl * 0.5) < (LOWQ ? 900 : 1800) ? 0 : 1;
     if (lod !== t.lod) { t.lod = lod; t.meshes[0].visible = lod === 0; t.meshes[1].visible = lod === 1; }
   }
   skyDome.position.copy(cam.position);
@@ -2451,7 +2667,7 @@ requestAnimationFrame(tick);
 addEventListener('resize', () => {
   cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix();
   // devicePixelRatio changes with browser zoom or a move to another screen; keep the same cap as at start.
-  renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.5 : 2));
+  renderer.setPixelRatio(Math.min(devicePixelRatio, PR_CAP()));
   renderer.setSize(innerWidth, innerHeight);
 });
 
@@ -2479,7 +2695,7 @@ FLY.api = {
   get fov() { return cam.fov; },
   // Turning the view (tests): true heading in degrees, and the same entry points as the compass and keys.
   rotate: { start: rotStart, end: rotEnd, step: rotStep, north: resetNorth, get heading() { return ((flight.yaw / DEG + siteForCamera().conv) % 360 + 360) % 360; }, get busy() { return !!(rot.src.size || rot.pending); } },
-  get starAttr() { return starGeo.getAttribute('position'); }, get skyCacheSize() { return skyCache.size; }, get groundVer() { return groundVer; }, get logDepth() { return LOGDEPTH; }, MODERN_YEAR,
+  get starAttr() { return starGeo.getAttribute('position'); }, get skyCacheSize() { return skyCache.size; }, get groundVer() { return groundVer; }, get logDepth() { return FLY.logDepthOn; }, get rendererAttempt() { return FLY.rendererAttempt; }, MODERN_YEAR,
   discBearing() {
     const d = (moonDisc.visible ? moonDisc : sunDisc).position.clone().sub(cam.position);
     const grid = (Math.atan2(d.x, -d.z) / DEG + 360) % 360;

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="flyover-build" content="2026-09-28.1255"/>
+<meta name="flyover-build" content="2026-09-28.1830-local"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Stonehenge landscape flyover (Stonehenge, Woodhenge, Bulford) · Tim Daw</title>
 <meta name="description" content="Fly over 12 km of Environment Agency lidar ground around Stonehenge, Woodhenge and Bulford, with the scheduled monuments, a live sun, moon and star sky for any date back to 2500 BC, and a horizon-aware alignment check. A modelling tool, not a reconstruction."/>
@@ -136,7 +136,8 @@ for (const n of ['coarse.bin', 'near.bin']) {
  #hud .row{display:flex;flex-wrap:wrap;align-items:center}
  #flight{position:static;margin-top:8px;padding:6px 8px;background:rgba(36,48,68,.45);border-radius:6px;font-size:11px}
  body.touch #flight{top:auto;right:auto}
- #hud.closed #flight{margin-top:6px}
+ @media (min-width:701px){ #hud{max-height:calc(100% - 34px)} } /* desktop: the panel stops above the one-line credits */
+ #hud.closed #flight{display:none} /* the location readout belongs to the panel: folded away with it (phones need the room) */
  #dock{position:fixed;right:12px;bottom:10px;z-index:5;display:flex;align-items:center;gap:8px;font-size:11px}
  #dock #planBtn{position:static;margin:0}
  #uiRow{margin:0;opacity:.8}
@@ -149,6 +150,18 @@ for (const n of ['coarse.bin', 'near.bin']) {
  #alDetails.active{background:#a84a1c}
  #alSite,#alEvent{display:block;width:100%}
  #alignOut.brief .more{display:none}
+ /* No WebGL: the start-up failure panel (role=alert) replaces the view and its controls; context-lost note */
+ body.no-webgl #joy,body.no-webgl #joyShow,body.no-webgl #dock,body.no-webgl #compassCtl,body.no-webgl #hud,body.no-webgl #touch{display:none}
+ #glFail{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10;width:min(560px,calc(100% - 24px));max-height:calc(100% - 24px);overflow:auto;box-sizing:border-box;background:#101a26;color:#eef2f6;border:1px solid #d9774a;border-radius:10px;padding:16px 18px;font-size:14px;line-height:1.45;box-shadow:0 6px 30px rgba(0,0,0,.6)}
+ #glFail h2{margin:0 0 6px;font-size:18px;color:#ffb48a}
+ #glFail ol{margin:4px 0 8px;padding-left:22px} #glFail li{margin:4px 0}
+ #glFail code{background:#243044;color:#fff;border-radius:3px;padding:1px 5px;user-select:all;-webkit-user-select:all;font-size:13px}
+ #glFail button{margin:0 0 0 4px;padding:3px 9px;background:#2f4260;color:#fff}
+ #glFail button:focus-visible{outline:2px solid #ffd27a;outline-offset:2px}
+ #glFail details{margin-top:6px} #glFail summary{cursor:pointer;color:#cfd8e3}
+ #glFail pre{white-space:pre-wrap;word-break:break-word;font:12px/1.4 ui-monospace,Consolas,monospace;background:#0a1018;color:#dfe7ef;padding:8px;border-radius:6px;margin:6px 0 0}
+ #qualityBtn{margin:0 0 0 6px;padding:1px 7px;font-size:10px;font-weight:400;border-radius:9px;background:#3a2a1a;color:#ffd9b8;border:1px solid #8a5a34;vertical-align:1px}
+ #qualityBtn:hover{background:#4a3624}
  @media (prefers-reduced-motion:reduce){ #caption,#periodCap,#joy,#compassCtl{transition:none} }
  /* Phones: a right-hand column (88 px) stays clear of the panel (which starts 10 px in); compass on top, load status wrapped below it */
  @media (max-width:700px){ #hud{max-width:calc(100% - 98px)} #compassCtl{top:10px} #load{top:80px;max-width:78px;box-sizing:border-box;white-space:normal;text-align:right;font-size:10px;padding:3px 5px} #rayBox{top:150px} }
@@ -294,15 +307,15 @@ for (const n of ['coarse.bin', 'near.bin']) {
 <script src="./woodhenge/posts.js"></script>
 <script src="./woodhenge/horizon.js"></script>
 <script src="./data/bulford_sites.js"></script>
-<script src="./data/flyover/bulford_features.js?v=2026-09-28.1255"></script>
+<script src="./data/flyover/bulford_features.js?v=2026-09-28.1830-local"></script>
 <script src="./data/site_ground_od.js"></script>
 <script src="./data/locked_poses.js"></script>
-<script src="./data/flyover/monuments.js?v=2026-09-28.1255"></script>
+<script src="./data/flyover/monuments.js?v=2026-09-28.1830-local"></script>
 <script src="./data/bright_stars.js"></script>
 <script type="importmap">
 {"imports":{"three":"./data/flyover/three.module.min.js"}}
 </script>
-<script type="module" src="./data/flyover/flyover_main.js?v=2026-09-28.1255"></script>
+<script type="module" src="./data/flyover/flyover_main.js?v=2026-09-28.1830-local"></script>
 <script>
 (function(){var b=document.body,t=null,c=document.getElementById('credits');var cb=document.getElementById('creditsBtn');function ex(v){c.setAttribute('aria-expanded',v);cb.setAttribute('aria-expanded',v);}
 function fold(){b.classList.remove('credits-open');ex('false');clearTimeout(t);}
