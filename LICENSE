@@ -25,7 +25,9 @@ Third-party data and code keep their own licences:
     Open Government Licence v3.0.
   - OpenStreetMap data: © OpenStreetMap contributors, Open Database
     Licence (ODbL) 1.0. Derived river and site data remain under ODbL.
-  - three.js (vendor/three.module.js): MIT, © Three.js Authors.
+  - Ordnance Survey OS Terrain 50 and OS Open Rivers: contains OS data
+    © Crown copyright and database right 2026, Open Government Licence v3.0.
+  - three.js r160 (data/flyover/three.module.min.js): MIT, © Three.js Authors.
   - astronomy-engine (vendor/astronomy.esm.js): MIT, © Don Cross.
 
 Open Government Licence: https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/

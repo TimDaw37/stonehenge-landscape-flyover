@@ -19,7 +19,7 @@ It is a single static page (three.js + astronomy-engine, no build step). To run 
 - **Flight pad** (bottom right): hold the ring to fly (forward, back, sideways), drag the ball to look, ▲/▼ to climb or drop, » for fast. It can be hidden; `?ui=classic` brings back the old layout.
 - Keys go to a focused slider, list or box (arrows move the slider, not the camera); click the view to fly with the keys again.
 - The panels can be page-zoomed on a phone; pinch and twist on the 3D view stay the flyover's own.
-- The panel (top left) has: Go to Stonehenge / Woodhenge / Bulford, a guided tour, speed, lowest height above ground, labels, monuments, the period slider, sky (sunrise, sunset, moonrise, moonset; gleam, half orb or full orb; stars), epoch (modern or 2500 BC), date and time.
+- The panel (top left) has: Go to Stonehenge / Woodhenge / Bulford, a guided tour, speed, labels, monuments, the timber monuments section, the period slider, sky (sunrise, sunset, moonrise, moonset; gleam, half orb or full orb; stars), epoch (modern or 2500 BC), date and time.
 
 ## Alignment check
 
@@ -52,7 +52,7 @@ You can fly anywhere over the 40 x 36 km ground plus a 3 km margin, up to 30 km 
 A collapsible panel section with two show/hide buttons.
 
 - **Woodhenge posts**: the 156 posts of the Woodhenge page (`woodhenge/posts.js`, from Maud Cunnington's 1929 plan, seated on the concrete markers), 0.64 m thick. Ring checkboxes (A to F, with counts and colours) and one height slider (1 to 12 m, 7.5 m by default, as that page). The heights are conjectural: no posts survive. Each post stands on the lidar ground at its own spot.
-- **Bulford posts**: every feature from [bulford-posts-3d](https://timdaw37.github.io/bulford-posts-3d/) (`data/flyover/bulford_features.js`, 39 features). Each is labelled with its number, kind and ground height (m OD), and the posts with their modelled height (8647 2.0 m, 9019 4.0 m; pits 0.8 m deep). Hole numbers are off by default. Tick 'Hole numbers' to show them up close or always. Crowded labels stack upward, and any with no room are hidden until the view comes closer. A 'Post height boost' (1 to 20x, as on that page) makes the two posts taller and is marked as exaggerated above 1x. Pit positions are digitised from the PAST 113 plan (Harding, Leivers & Silva 2026), not the Wessex GNSS survey.
+- **Bulford posts**: every feature from [bulford-posts-3d](https://timdaw37.github.io/bulford-posts-3d/) (`data/flyover/bulford_features.js`, 39 features). Each is labelled with its number, kind and ground height (m OD). The two posts (8647 and 9019) are drawn 1.6 m above ground, labelled **(Conjecture)**: the post-pits are 0.8 m deep (the PAST 113 average for the pair, measuring surface not stated), taken as a third of a 2.4 m post. Hole numbers are off by default. Tick 'Hole numbers' to show them up close or always. Crowded labels stack upward, and any with no room are hidden until the view comes closer. (The 'Post height boost' of that page is kept in the code but hidden in this viewer.) Pit positions are digitised from the PAST 113 plan (Harding, Leivers & Silva 2026), not the Wessex GNSS survey.
 
 ## Mesolithic car-park posts
 
@@ -75,7 +75,8 @@ Posts A, B and C and post-pit 9580 are placed from Cleal et al. 1995 Fig. 24, ch
 - **Rivers within the lidar, Cuckoo Stone, Blick Mead, Bluestonehenge:** © OpenStreetMap contributors, Open Database Licence (ODbL).
 - **Tor Stone and Cuckoo Stone (size, recumbent state):** Harding, P., Nash, D., Ciborowski, J. et al. 2025. Earliest movement of sarsen into the Stonehenge landscape: new insights from geochemical and visibility analysis of the Cuckoo Stone and Tor Stone. *Proceedings of the Prehistoric Society* 90, 229–251. https://doi.org/10.1017/ppr.2024.13
 - **Mesolithic car-park posts:** Vatcher, F. de M. and Vatcher, H.L. 1973. Excavation of three post-holes in Stonehenge car park. *Wiltshire Archaeological and Natural History Magazine* 68, 57–63; Allen, M.J. in Cleal, R.M.J., Walker, K.E. and Montague, R. 1995. *Stonehenge in its Landscape: Twentieth-century excavations* (English Heritage), Fig. 24 and the radiocarbon dates.
-- **Woodhenge posts:** read from Maud Cunnington's plan (1929), set on the concrete markers.
+- **Woodhenge posts:** read from Maud Cunnington's plan (Cunnington, M.E. 1929. *Woodhenge*), set on the concrete markers. Post heights are conjectural.
+- **Bulford pits and posts:** positions digitised from the plan in Harding, Leivers & Silva 2026, *PAST* 113 (the Prehistoric Society's newsletter), via [bulford-posts-3d](https://timdaw37.github.io/bulford-posts-3d/). Post heights are conjectural.
 - **Stonehenge stones:** the pose compilation from [stonehenge-block-3d](https://github.com/TimDaw37/stonehenge-block-3d).
 - **Libraries:** three.js r160 (MIT, the official minified build in `data/flyover/three.module.min.js`), astronomy-engine (MIT, `vendor/`); their licence headers are kept.
 
