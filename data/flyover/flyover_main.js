@@ -1,7 +1,9 @@
 // The flyover page (landscape_v2.html; index.html in the public repo): free flight over the Stonehenge, Woodhenge and Bulford landscape.
 import * as THREE from 'three';
 import * as FS from './flyover_sky.js?v=2026-09-27.1900';
-import * as Sky from '../../skyscape_sky.js?v=2026-09-27.1900';
+// No ?v= here: flyover_sky.js imports the same URL, so the browser keeps ONE module instance (with ?v= it
+// fetched and ran skyscape_sky.js twice, as two separate modules).
+import * as Sky from '../../skyscape_sky.js';
 import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-27.1900';
 const { starHorizontal, starsAbove } = FS; // stars from flyover_sky (dates right for years 0-99)
 
