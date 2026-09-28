@@ -250,7 +250,9 @@ function colourFor(e) {
   const id = String(e.id);
   if (id === '92' || id === '94') return 0xf0f4fa;
   if (e.role === 'bluestone' || e.role === 'bluestone_lintel' || e.colour_class === 'blue' || e.colour_class === 'blue_bluestone') return 0x3f86b8;
-  if (id === '80' || e.colour_class === 'altar_pink') return 0xff69b4;
+  // Altar Stone: was hot pink (0xff69b4), the pose-checker highlight colour. A muted green-grey sandstone keeps it
+  // distinct from the sarsens without looking like a UI highlight. (Its 0.1 m height_m in locked_poses.js is left as is.)
+  if (id === '80' || e.colour_class === 'altar_pink') return 0x7f8070;
   return 0x8a8e94;
 }
 if (LP) {
