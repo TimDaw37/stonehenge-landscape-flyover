@@ -34,6 +34,7 @@ function localXZ(e, n) { return { x: e - CE, z: -(n - CN) }; }
 const BOUNDS = { x0: 396000 - 412245.35 - 3000, x1: 436000 - 412245.35 + 3000, z0: -(162000 - 142194.11) - 3000, z1: -(126000 - 142194.11) + 3000 };
 const MAX_H = 30000;
 const isTouch = ('ontouchstart' in window) || matchMedia('(pointer: coarse)').matches;
+const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
 if (isTouch) document.body.classList.add('touch');
 
 // Logarithmic depth (code review): no artefacts found in side-by-side views (sun and moon at the skyline, river,
@@ -923,8 +924,10 @@ function angLerp(a, b, t) { const d = ((b - a + Math.PI) % (2 * Math.PI) + 2 * M
 function flyTo(pose, opts = {}) {
   const from = { pos: flight.pos.clone(), yaw: flight.yaw, pitch: flight.pitch };
   const dist = from.pos.distanceTo(pose.pos);
-  const dur = opts.dur != null ? opts.dur : THREE.MathUtils.clamp(1.2 + Math.sqrt(dist) / 13, 1.2, 7);
-  flyAnim = { from, to: pose, t: 0, dur, arc: Math.min(450, dist * 0.12), onDone: opts.onDone || null };
+  // prefers-reduced-motion: jump straight to the pose (next frame) instead of an arcing flight.
+  const still = REDUCED_MOTION.matches;
+  const dur = still ? 1e-3 : opts.dur != null ? opts.dur : THREE.MathUtils.clamp(1.2 + Math.sqrt(dist) / 13, 1.2, 7);
+  flyAnim = { from, to: pose, t: 0, dur, arc: still ? 0 : Math.min(450, dist * 0.12), onDone: opts.onDone || null };
   flight.vel.set(0, 0, 0);
 }
 function stepFlyAnim(dt) {
