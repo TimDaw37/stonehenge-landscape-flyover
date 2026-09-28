@@ -42,7 +42,14 @@ if (isTouch) document.body.classList.add('touch');
 // Logarithmic depth (code review): no artefacts found in side-by-side views (sun and moon at the skyline, river,
 // posts, far ground), and it keeps the 20 km far ground from flickering against the wide ground. ?logdepth=0 turns it off.
 const LOGDEPTH = new URLSearchParams(location.search).get('logdepth') !== '0';
-const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: LOGDEPTH });
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: LOGDEPTH }); }
+catch (err) {
+  // No WebGL (disabled, blocklisted GPU, very old browser): say so instead of leaving 'Loading…' for ever.
+  const l = document.getElementById('load');
+  if (l) { l.textContent = 'This flyover needs WebGL, which this browser or device has turned off.'; l.style.cssText += ';pointer-events:auto;max-width:60vw;white-space:normal;background:#8a2f18;color:#fff'; }
+  throw err;
+}
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.5 : 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -893,6 +900,8 @@ worker.onmessage = (ev) => {
   }
   if (d.type === 'error') { loadState.error = d.message; paintLoad(); console.warn('terrain: ' + d.message); }
 };
+// The worker script itself failed to load or threw outside its own try/catch.
+worker.onerror = (e) => { loadState.error = 'worker failed (' + (e.message || 'load error') + ')'; paintLoad(); console.warn('terrain worker failed', e.message || e); };
 // Better ground arrived: reseat the stones and redo an automatic rise/set time.
 function groundChanged() {
   seatStones();
