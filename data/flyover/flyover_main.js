@@ -1,15 +1,15 @@
 // The flyover page (landscape_v2.html; index.html in the public repo): free flight over the Stonehenge, Woodhenge and Bulford landscape.
 import * as THREE from 'three';
-import * as FS from './flyover_sky.js?v=2026-09-28.1125';
+import * as FS from './flyover_sky.js?v=2026-09-28.1300-local';
 // Same URL as the import in flyover_sky.js (no ?v=), so both share one module instance.
 import * as Sky from '../../skyscape_sky.js';
-import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-28.1125';
+import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-28.1300-local';
 const { starHorizontal, starsAbove } = FS; // stars from flyover_sky (dates right for years 0-99)
 
 // ---------------------------------------------------------------- basics
 const FLY = window.__fly = { marks: {}, detailDone: false, bytes: {} };
 // Build stamp: the page's <meta name="flyover-build"> must match, or the browser is running cached old code.
-const BUILD = '2026-09-28.1125';
+const BUILD = '2026-09-28.1300-local';
 FLY.build = BUILD;
 {
   const want = document.querySelector('meta[name="flyover-build"]');
@@ -978,6 +978,15 @@ addEventListener('keydown', (ev) => {
   const tg = ev.target;
   if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'SELECT' || tg.tagName === 'TEXTAREA' || tg.isContentEditable)) return;
   if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  // During a flight or the tour the left/right arrows turn the view (round its destination) instead of
+  // stopping it; N faces north. Neither stops the tour.
+  const rk = ROT_KEYS[ev.code];
+  if (rk && (flyAnim || tour)) {
+    ev.preventDefault();
+    if (!ev.repeat) rotStart('k' + ev.code, rk);
+    return;
+  }
+  if (ev.code === 'KeyN') { resetNorth(); return; }
   if (FLIGHT_KEYS.has(ev.code)) {
     keys.add(ev.code);
     if (!ev.code.startsWith('Shift')) cancelAuto();
@@ -990,8 +999,8 @@ addEventListener('keydown', (ev) => {
   if (ev.code === 'BracketLeft' || ev.key === '-') { nudgeSpeed(0.8); return; }
   if (ev.code === 'Space' && tour) { ev.preventDefault(); tour.paused = !tour.paused; }
 });
-addEventListener('keyup', (ev) => keys.delete(ev.code));
-addEventListener('blur', () => keys.clear());
+addEventListener('keyup', (ev) => { keys.delete(ev.code); if (ROT_KEYS[ev.code]) rotEnd('k' + ev.code, true); });
+addEventListener('blur', () => { keys.clear(); rotClear(); });
 
 // Mouse / touch: left drag grabs the ground and moves the landscape as a block (map style); right drag
 // (or Ctrl/Alt + left drag) looks around; middle drag (or Shift + right drag) orbits the grabbed point.
@@ -1294,6 +1303,131 @@ canvas.addEventListener('dblclick', (ev) => {
   addEventListener('keydown', lit); addEventListener('keyup', lit);
   joy.addEventListener('contextmenu', (ev) => ev.preventDefault());
   FLY.pad = pad;
+}
+
+// ---------------------------------------------------------------- turning the view
+// The compass (top right) is the turn control, as in Google Earth: drag the ring (or the knob by its N) round
+// like a dial and the view turns with it; click or tap it (or press N) to face north. Focused, it is a slider:
+// left/right arrows or Q/E turn 15 degrees, Page Up/Down 45, Home (Enter, Space) faces north. When the view looks
+// down at the ground the turn goes round the ground point at the centre of the view; looking level or up (eye
+// height, the alignment view) or in plan view it turns on the spot. During a flight or the tour the whole
+// path turns round its destination, so the tour carries on. Reduced motion: key and north turns jump.
+const ROT_KEYS = { ArrowLeft: -1, ArrowRight: 1 };
+const ROT_SPEED = 60 * DEG, ROT_STEP = 15 * DEG;
+const rot = { src: new Map(), pending: 0, pivot: null, pivotFor: null, held: 0, done: 0, repeatAt: 0, drag: null };
+const wrapPi = (a) => ((a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+function rotDir() { let d = 0; for (const v of rot.src.values()) d += v; return Math.sign(d); }
+function rotStart(key, dir) {
+  if (rot.src.has(key)) return;
+  rot.src.set(key, dir); rot.held = 0; rot.done = 0; rot.repeatAt = 0.45;
+  if (REDUCED_MOTION.matches) rotateNow(dir * ROT_STEP);
+}
+// End a hold; a quick tap still turns a full step.
+function rotEnd(key, tapStep) {
+  const dir = rot.src.get(key); if (dir == null) return;
+  rot.src.delete(key);
+  if (tapStep && !REDUCED_MOTION.matches && rot.held < 0.3 && Math.abs(rot.done) < ROT_STEP) rot.pending += dir * (ROT_STEP - Math.abs(rot.done));
+}
+function rotClear() { rot.src.clear(); rot.drag = null; }
+function rotStep(dir, step = ROT_STEP) { if (REDUCED_MOTION.matches) rotateNow(dir * step); else rot.pending += dir * step; }
+// Face true north (true heading = grid heading + convergence); during a flight, its destination faces north.
+function resetNorth() {
+  const q = flyAnim ? flyAnim.to : flight;
+  flight.yawRate = 0; // no arrow-key turn left coasting past north
+  const conv = FS.convergenceAt(CE + q.pos.x, CN - q.pos.z);
+  const d = wrapPi(-conv * DEG - q.yaw) - (flyAnim ? 0 : rot.pending);
+  if (REDUCED_MOTION.matches) { rot.pending = 0; rotateNow(d); } else rot.pending += d;
+}
+// The ground point at the centre of the view, if the view looks down at the ground within reach.
+function freePivot() {
+  if (plan || flight.pitch > -3 * DEG) return null;
+  const hit = groundHit(innerWidth / 2, innerHeight / 2);
+  if (!hit || Math.hypot(hit.x - flight.pos.x, hit.z - flight.pos.z) > 6000) return null;
+  return hit;
+}
+// The same for the pose a flight is heading to.
+function animPivot(A) {
+  const q = A.to;
+  if (plan || q.pitch > -3 * DEG) return null;
+  const agl = q.pos.y - groundOr(q.pos.x, q.pos.z, q.pos.y - 50);
+  const h = Math.min(6000, Math.max(0, agl) / Math.tan(-q.pitch));
+  return new THREE.Vector3(q.pos.x + Math.sin(q.yaw) * h, 0, q.pos.z - Math.cos(q.yaw) * h);
+}
+function spinPose(q, P, d) {
+  if (P) {
+    const vx = q.pos.x - P.x, vz = q.pos.z - P.z, c = Math.cos(d), sn = Math.sin(d);
+    q.pos.x = P.x + vx * c - vz * sn; q.pos.z = P.z + vx * sn + vz * c;
+  }
+  q.yaw += d;
+}
+// Turn the view by d radians (positive: to the right, heading increases).
+function rotateNow(d) {
+  const key = flyAnim || 'free';
+  if (rot.pivotFor !== key) {
+    rot.pivotFor = key;
+    if (flyAnim) { flyAnim.to = { ...flyAnim.to, pos: flyAnim.to.pos.clone() }; rot.pivot = animPivot(flyAnim); }
+    else rot.pivot = freePivot();
+  }
+  if (flyAnim) { spinPose(flyAnim.from, rot.pivot, d); spinPose(flyAnim.to, rot.pivot, d); spinPose(flight, rot.pivot, d); }
+  else if (rot.pivot) orbitAround(rot.pivot, d, 0);
+  else flight.yaw += d;
+}
+function stepRotate(dt) {
+  const dir = rotDir(), still = REDUCED_MOTION.matches;
+  let d = 0;
+  if (dir) {
+    rot.held += dt;
+    if (still) { if (rot.held >= rot.repeatAt) { d += dir * ROT_STEP; rot.repeatAt += 0.4; } }
+    else d += dir * ROT_SPEED * Math.min(1, 0.35 + rot.held / 0.35) * dt;
+    rot.done += d;
+  }
+  if (rot.pending) {
+    if (still) { d += rot.pending; rot.pending = 0; }
+    else {
+      let take = rot.pending * (1 - Math.exp(-dt / 0.12));
+      const minT = 25 * DEG * dt;
+      if (Math.abs(take) < minT) take = Math.sign(rot.pending) * Math.min(minT, Math.abs(rot.pending));
+      d += take; rot.pending -= take;
+      if (Math.abs(rot.pending) < 1e-5) rot.pending = 0;
+    }
+  }
+  if (d) rotateNow(d);
+  if (!dir && !rot.pending && !rot.drag) rot.pivotFor = null;
+}
+{
+  const cb = document.getElementById('compassCtl');
+  if (cb) {
+    let swallow = false;
+    const ang = (ev) => { const r = cb.getBoundingClientRect(); const x = ev.clientX - (r.left + r.width / 2), y = ev.clientY - (r.top + r.height / 2); return { a: Math.atan2(y, x), l: Math.hypot(x, y) }; };
+    cb.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault(); swallow = false; cb.setPointerCapture(ev.pointerId);
+      const { a } = ang(ev);
+      rot.drag = { id: ev.pointerId, a, x0: ev.clientX, y0: ev.clientY, live: false };
+    });
+    cb.addEventListener('pointermove', (ev) => {
+      const g = rot.drag; if (!g || ev.pointerId !== g.id) return;
+      const { a, l } = ang(ev);
+      if (!g.live) { if (Math.hypot(ev.clientX - g.x0, ev.clientY - g.y0) < 5) return; g.live = true; cb.classList.add('drag'); restoreFov(); }
+      // The rose turns with the pointer (a dial): clockwise on screen turns the heading anticlockwise.
+      if (l > 6) rotateNow(-wrapPi(a - g.a));
+      g.a = a;
+    });
+    const end = (ev) => { const g = rot.drag; if (!g || ev.pointerId !== g.id) return; if (g.live) swallow = true; rot.drag = null; cb.classList.remove('drag'); };
+    cb.addEventListener('pointerup', end); cb.addEventListener('pointercancel', end); cb.addEventListener('lostpointercapture', end);
+    cb.addEventListener('click', () => { if (swallow) { swallow = false; return; } resetNorth(); });
+    cb.addEventListener('contextmenu', (ev) => ev.preventDefault());
+    // Slider keys while focused (they do not reach the flight keys).
+    const CK = { ArrowLeft: -1, KeyQ: -1, ArrowRight: 1, KeyE: 1, PageUp: -3, PageDown: 3 };
+    cb.addEventListener('keydown', (ev) => {
+      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      const k = CK[ev.code];
+      if (k) { rotStep(Math.sign(k), Math.abs(k) * ROT_STEP); }
+      else if (ev.code === 'Home' || ev.code === 'Enter' || ev.code === 'Space' || ev.code === 'KeyN') { if (!ev.repeat) resetNorth(); }
+      else return;
+      ev.preventDefault(); ev.stopPropagation();
+    });
+  }
 }
 
 function stepFlight(dt) {
@@ -2102,7 +2236,7 @@ function drawRays() {
   const [ox, oyS] = toScreen(o.x, oy, o.z);
   // Screen boxes to keep labels off: the panels and buttons over the view.
   const obstacles = [];
-  for (const id of ['hud', 'rayBox', 'dock', 'joy', 'compass', 'load', 'credits', 'periodCap', 'caption', 'updown']) {
+  for (const id of ['hud', 'rayBox', 'dock', 'joy', 'compassCtl', 'load', 'credits', 'periodCap', 'caption', 'updown']) {
     const el = document.getElementById(id); if (!el || el.hidden) continue;
     const b = el.getBoundingClientRect(); if (b.width > 0 && b.height > 0 && getComputedStyle(el).display !== 'none' && +getComputedStyle(el).opacity > 0.05) obstacles.push([b.left - 4, b.top - 4, b.right + 4, b.bottom + 4]);
   }
@@ -2188,7 +2322,9 @@ setRayMode('one');
 // ---------------------------------------------------------------- HUD
 const flightEl = document.getElementById('flight');
 // Compass: turns with the camera heading; N is true north (grid bearing + convergence).
-const compassRose = document.getElementById('compassRose');
+const compassRose = document.getElementById('compassRose'), compassCtl = document.getElementById('compassCtl');
+const POINTS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+let compassSaid = -1;
 // Grid convergence at the camera (true = grid + conv), from the OSGB projection; refreshed with the HUD.
 let compassConv = FS.convergenceAt(CE + flight.pos.x, CN - flight.pos.z), compassLast = 1e9;
 function updateCompass() {
@@ -2197,6 +2333,13 @@ function updateCompass() {
   if (Math.abs(hdg - compassLast) < 0.1) return;
   compassLast = hdg;
   compassRose.setAttribute('transform', 'rotate(' + (-hdg).toFixed(2) + ')');
+  // The slider's value is the heading (whole degrees true), for screen readers.
+  const said = Math.round((hdg % 360 + 360) % 360) % 360;
+  if (compassCtl && said !== compassSaid) {
+    compassSaid = said;
+    compassCtl.setAttribute('aria-valuenow', String(said));
+    compassCtl.setAttribute('aria-valuetext', said + ' degrees true, ' + POINTS[Math.round(said / 45) % 8]);
+  }
 }
 let hudAt = 0;
 function paintFlight(g) {
@@ -2237,6 +2380,7 @@ function tick(now) {
     if (playEnd != null && minuteUt >= playEnd) { minuteUt = playEnd; stopDayPlay(); }
     syncUtUi();
   }
+  stepRotate(dt);
   if (flyAnim) stepFlyAnim(dt); else stepFlight(dt);
   stepTour(dt);
   const g = clampFlight();
@@ -2333,6 +2477,8 @@ FLY.api = {
   toScreen(x, y, z) { applyCamera(); cam.updateMatrixWorld(); const v = new THREE.Vector3(x, y, z).project(cam); if (v.z > 1) return null; return { x: (v.x + 1) / 2 * innerWidth, y: (1 - v.y) / 2 * innerHeight }; },
   discScreen() { const d = moonDisc.visible ? moonDisc : sunDisc; if (!d.visible) return null; return FLY.api.toScreen(d.position.x, d.position.y, d.position.z); },
   get fov() { return cam.fov; },
+  // Turning the view (tests): true heading in degrees, and the same entry points as the compass and keys.
+  rotate: { start: rotStart, end: rotEnd, step: rotStep, north: resetNorth, get heading() { return ((flight.yaw / DEG + siteForCamera().conv) % 360 + 360) % 360; }, get busy() { return !!(rot.src.size || rot.pending); } },
   get starAttr() { return starGeo.getAttribute('position'); }, get skyCacheSize() { return skyCache.size; }, get groundVer() { return groundVer; }, get logDepth() { return LOGDEPTH; }, MODERN_YEAR,
   discBearing() {
     const d = (moonDisc.visible ? moonDisc : sunDisc).position.clone().sub(cam.position);

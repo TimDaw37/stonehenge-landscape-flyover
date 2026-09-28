@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="flyover-build" content="2026-09-28.1125"/>
+<meta name="flyover-build" content="2026-09-28.1300-local"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Stonehenge landscape flyover (Stonehenge, Woodhenge, Bulford) · Tim Daw</title>
 <meta name="description" content="Fly over 12 km of Environment Agency lidar ground around Stonehenge, Woodhenge and Bulford, with the scheduled monuments, a live sun, moon and star sky for any date back to 2500 BC, and a horizon-aware alignment check. A modelling tool, not a reconstruction."/>
@@ -41,7 +41,15 @@ for (const n of ['coarse.bin', 'near.bin']) {
  kbd{background:#243044;border-radius:3px;padding:0 4px;font-size:11px}
  #flight{position:fixed;right:10px;bottom:10px;z-index:2;background:rgba(10,16,24,.8);padding:6px 10px;border-radius:6px;
   font:12px/1.4 ui-monospace,Consolas,monospace;white-space:pre;pointer-events:none}
- #compass{position:fixed;right:12px;top:40px;z-index:2;width:54px;height:54px;pointer-events:none;opacity:.8}
+ /* Compass = the turn control (Google Earth style): drag the ring or its knob round to turn the view, click to face north */
+ #compassCtl{position:fixed;right:12px;top:40px;z-index:4;width:56px;height:56px;border-radius:50%;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;opacity:.88;transition:opacity .2s}
+ #compassCtl:hover,#compassCtl:focus-visible,#compassCtl.drag{opacity:1}
+ #compassCtl.drag{cursor:grabbing}
+ #compassCtl:focus-visible{outline:2px solid #ffd27a;outline-offset:2px}
+ #compass{display:block;width:100%;height:100%;pointer-events:none;overflow:visible}
+ #compassCtl .knob{fill:#dfe7ef;stroke:#0a1018;stroke-width:1.2}
+ #compassCtl:hover .knob,#compassCtl.drag .knob,#compassCtl:focus-visible .knob{fill:#ffd27a}
+ body.touch #compassCtl{width:64px;height:64px}
  #credits{position:fixed;left:50%;transform:translateX(-50%);bottom:4px;z-index:2;font-size:10px;color:#aab4c0;opacity:.7;pointer-events:none;text-align:center;max-width:60vw}
  #load{position:fixed;right:10px;top:10px;z-index:2;background:rgba(10,16,24,.75);padding:4px 8px;border-radius:5px;font-size:11px;pointer-events:none}
  #caption{position:fixed;left:50%;bottom:64px;transform:translateX(-50%);max-width:min(520px,86vw);z-index:2;
@@ -141,9 +149,9 @@ for (const n of ['coarse.bin', 'near.bin']) {
  #alDetails.active{background:#a84a1c}
  #alSite,#alEvent{display:block;width:100%}
  #alignOut.brief .more{display:none}
- @media (prefers-reduced-motion:reduce){ #caption,#periodCap,#joy{transition:none} }
+ @media (prefers-reduced-motion:reduce){ #caption,#periodCap,#joy,#compassCtl{transition:none} }
  /* Phones: a right-hand column (88 px) stays clear of the panel (which starts 10 px in); compass on top, load status wrapped below it */
- @media (max-width:700px){ #hud{max-width:calc(100% - 98px)} #compass{top:10px} #load{top:70px;max-width:78px;box-sizing:border-box;white-space:normal;text-align:right;font-size:10px;padding:3px 5px} #rayBox{top:150px} }
+ @media (max-width:700px){ #hud{max-width:calc(100% - 98px)} #compassCtl{top:10px} #load{top:80px;max-width:78px;box-sizing:border-box;white-space:normal;text-align:right;font-size:10px;padding:3px 5px} #rayBox{top:150px} }
  /* Narrow phones: the open panel reaches under the flight pad, so hide the pad while the panel is open; the dock and credits stay on top, and the panel scrolls clear of them */
  @media (max-width:600px){ body:has(#hud:not(.closed)) #joy,body:has(#hud:not(.closed)) #joyShow{display:none} #hud:not(.closed){padding-bottom:44px} }
 </style>
@@ -153,8 +161,8 @@ for (const n of ['coarse.bin', 'near.bin']) {
 <div id="hud">
   <div class="top"><b>Stonehenge landscape <span id="buildStamp" style="font-weight:400;font-size:10px;opacity:.5;margin-left:4px"></span></b><button type="button" id="hudToggle" aria-controls="hudBody" aria-expanded="true">Controls</button></div>
   <div class="body" id="hudBody">
-  <div class="note classic">Fly anywhere. <kbd>W</kbd><kbd>S</kbd>/<kbd>↑</kbd><kbd>↓</kbd> forward and back, <kbd>A</kbd><kbd>D</kbd> sideways, <kbd>←</kbd><kbd>→</kbd> turn, <kbd>E</kbd>/<kbd>R</kbd> up, <kbd>Q</kbd>/<kbd>F</kbd> down, <kbd>Shift</kbd> faster, <kbd>L</kbd> labels, <kbd>P</kbd> plan view (with alignment rays).<br>Mouse: left-drag grabs and moves the landscape, right-drag (or <kbd>Ctrl</kbd>/<kbd>Alt</kbd>+drag) looks around, middle-drag (or <kbd>Shift</kbd>+right-drag) orbits the grabbed point, wheel moves toward the pointer, double-click flies there. Plan view: drag pans, right-drag turns. Touch: one finger moves the landscape, pinch zooms, twist turns, two-finger drag tilts.</div>
-  <div class="note modern" title="Mouse: left-drag grabs and moves the landscape, right-drag (or Ctrl/Alt+drag) looks around, middle-drag (or Shift+right-drag) orbits the grabbed point, wheel moves toward the pointer, double-click flies there. Plan view: drag pans, right-drag turns. Touch: one finger moves the landscape, pinch zooms, twist turns, two-finger drag tilts.">Drag the ground to move it, right-drag to look, wheel to zoom, double-click to fly there. <kbd>L</kbd> labels, <kbd>P</kbd> plan view. The pad (bottom right) flies and shows the keys.</div>
+  <div class="note classic">Fly anywhere. <kbd>W</kbd><kbd>S</kbd>/<kbd>↑</kbd><kbd>↓</kbd> forward and back, <kbd>A</kbd><kbd>D</kbd> sideways, <kbd>←</kbd><kbd>→</kbd> turn (or drag the compass round; click it or press <kbd>N</kbd> to face north), <kbd>E</kbd>/<kbd>R</kbd> up, <kbd>Q</kbd>/<kbd>F</kbd> down, <kbd>Shift</kbd> faster, <kbd>L</kbd> labels, <kbd>P</kbd> plan view (with alignment rays).<br>Mouse: left-drag grabs and moves the landscape, right-drag (or <kbd>Ctrl</kbd>/<kbd>Alt</kbd>+drag) looks around, middle-drag (or <kbd>Shift</kbd>+right-drag) orbits the grabbed point, wheel moves toward the pointer, double-click flies there. Plan view: drag pans, right-drag turns. Touch: one finger moves the landscape, pinch zooms, twist turns, two-finger drag tilts.</div>
+  <div class="note modern" title="Mouse: left-drag grabs and moves the landscape, right-drag (or Ctrl/Alt+drag) looks around, middle-drag (or Shift+right-drag) orbits the grabbed point, wheel moves toward the pointer, double-click flies there. Plan view: drag pans, right-drag turns. Touch: one finger moves the landscape, pinch zooms, twist turns, two-finger drag tilts.">Drag the ground to move it, right-drag to look, wheel to zoom, double-click to fly there. Drag the compass (top right) round to turn the view; click it or press <kbd>N</kbd> to face north. <kbd>L</kbd> labels, <kbd>P</kbd> plan view. The pad (bottom right) flies and shows the keys.</div>
   <label class="t">Go to</label>
   <div class="row">
     <button type="button" id="goSH">Stonehenge</button>
@@ -241,14 +249,17 @@ for (const n of ['coarse.bin', 'near.bin']) {
   <div id="flight"></div>
 </div>
 <div id="load">Loading…</div>
-<svg id="compass" viewBox="-30 -30 60 60" role="img" aria-label="Compass: N is true north">
+<div id="compassCtl" role="slider" tabindex="0" aria-label="View heading (compass; N is true north). Drag round or use the arrow keys to turn, Home or click to face north" aria-valuemin="0" aria-valuemax="359" aria-valuenow="0" aria-valuetext="0 degrees true, north" title="Drag round to turn the view · click to face north (N) · focused: ← → or Q E turn, Home faces north">
+<svg id="compass" viewBox="-31 -31 62 62" aria-hidden="true" focusable="false">
  <circle r="26" fill="rgba(10,16,24,.6)" stroke="rgba(220,230,240,.35)" stroke-width="1"/>
  <g id="compassRose">
-  <path d="M0,-14 L4.5,-2 L0,-4.5 L-4.5,-2 Z" fill="#e8584a"/>
-  <path d="M0,14 L4.5,2 L0,4.5 L-4.5,2 Z" fill="rgba(220,230,240,.55)"/>
-  <text x="0" y="-19.5" font-size="9" font-weight="700" fill="#fff" text-anchor="middle" dominant-baseline="middle" font-family="system-ui,sans-serif">N</text>
+  <path d="M0,-12.5 L4.5,-2 L0,-4.5 L-4.5,-2 Z" fill="#e8584a"/>
+  <path d="M0,12.5 L4.5,2 L0,4.5 L-4.5,2 Z" fill="rgba(220,230,240,.55)"/>
+  <text x="0" y="-17.6" font-size="8.5" font-weight="700" fill="#fff" text-anchor="middle" dominant-baseline="middle" font-family="system-ui,sans-serif">N</text>
+  <circle class="knob" cx="0" cy="-26" r="4"/>
  </g>
 </svg>
+</div>
 <svg id="raySvg" aria-hidden="true"></svg>
 <div id="rayBox" hidden>
  <div class="rt"><b>Alignment rays</b><button type="button" id="rayOff">Off</button><button type="button" id="rayOne" title="The event chosen in the Alignment check panel, with its reverse">Event</button><button type="button" id="rayFan" title="Solstices, equinox and lunar standstills">Fan</button></div>
@@ -283,15 +294,15 @@ for (const n of ['coarse.bin', 'near.bin']) {
 <script src="./woodhenge/posts.js"></script>
 <script src="./woodhenge/horizon.js"></script>
 <script src="./data/bulford_sites.js"></script>
-<script src="./data/flyover/bulford_features.js?v=2026-09-28.1125"></script>
+<script src="./data/flyover/bulford_features.js?v=2026-09-28.1300-local"></script>
 <script src="./data/site_ground_od.js"></script>
 <script src="./data/locked_poses.js"></script>
-<script src="./data/flyover/monuments.js?v=2026-09-28.1125"></script>
+<script src="./data/flyover/monuments.js?v=2026-09-28.1300-local"></script>
 <script src="./data/bright_stars.js"></script>
 <script type="importmap">
 {"imports":{"three":"./data/flyover/three.module.min.js"}}
 </script>
-<script type="module" src="./data/flyover/flyover_main.js?v=2026-09-28.1125"></script>
+<script type="module" src="./data/flyover/flyover_main.js?v=2026-09-28.1300-local"></script>
 <script>
 (function(){var b=document.body,t=null,c=document.getElementById('credits');var cb=document.getElementById('creditsBtn');function ex(v){c.setAttribute('aria-expanded',v);cb.setAttribute('aria-expanded',v);}
 function fold(){b.classList.remove('credits-open');ex('false');clearTimeout(t);}
