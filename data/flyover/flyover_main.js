@@ -1,8 +1,7 @@
 // The flyover page (landscape_v2.html; index.html in the public repo): free flight over the Stonehenge, Woodhenge and Bulford landscape.
 import * as THREE from 'three';
 import * as FS from './flyover_sky.js?v=2026-09-27.1900';
-// No ?v= here: flyover_sky.js imports the same URL, so the browser keeps ONE module instance (with ?v= it
-// fetched and ran skyscape_sky.js twice, as two separate modules).
+// Same URL as the import in flyover_sky.js (no ?v=), so both share one module instance.
 import * as Sky from '../../skyscape_sky.js';
 import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-27.1900';
 const { starHorizontal, starsAbove } = FS; // stars from flyover_sky (dates right for years 0-99)
@@ -250,8 +249,7 @@ function colourFor(e) {
   const id = String(e.id);
   if (id === '92' || id === '94') return 0xf0f4fa;
   if (e.role === 'bluestone' || e.role === 'bluestone_lintel' || e.colour_class === 'blue' || e.colour_class === 'blue_bluestone') return 0x3f86b8;
-  // Altar Stone: was hot pink (0xff69b4), the pose-checker highlight colour. A muted green-grey sandstone keeps it
-  // distinct from the sarsens without looking like a UI highlight. (Its 0.1 m height_m in locked_poses.js is left as is.)
+  // Altar Stone: muted green-grey sandstone, distinct from the sarsens without reading as a UI highlight.
   if (id === '80' || e.colour_class === 'altar_pink') return 0x7f8070;
   return 0x8a8e94;
 }
@@ -1288,7 +1286,7 @@ canvas.addEventListener('dblclick', (ev) => {
   // Nothing may stay stuck on if the window loses focus mid-press.
   addEventListener('blur', () => { mv = lk = null; pad.fwd = pad.str = pad.turn = pad.tilt = pad.up = 0; dot.style.display = 'none'; ball.style.transform = ''; joy.classList.remove('on'); });
   const fastB = document.getElementById('jFast');
-  fastB.onclick = () => { pad.fast = !pad.fast; fastB.classList.toggle('active', pad.fast); };
+  fastB.onclick = () => { pad.fast = !pad.fast; fastB.classList.toggle('active', pad.fast); fastB.setAttribute('aria-pressed', String(pad.fast)); };
   // Keys light the matching part of the pad.
   const lit = () => { const k = (c) => keys.has(c); fastB.classList.toggle('active', pad.fast || k('ShiftLeft') || k('ShiftRight'));
     document.getElementById('jUp').classList.toggle('active', pad.up > 0 || k('KeyE') || k('KeyR'));

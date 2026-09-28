@@ -142,10 +142,10 @@ for (const n of ['coarse.bin', 'near.bin']) {
  #alSite,#alEvent{display:block;width:100%}
  #alignOut.brief .more{display:none}
  @media (prefers-reduced-motion:reduce){ #caption,#periodCap,#joy{transition:none} }
- /* Phones: keep a right-hand column clear of the panel so the load status and compass are not hidden under it */
- @media (max-width:700px){ #hud{max-width:calc(100% - 88px)} #load{max-width:68px;white-space:normal;text-align:right;font-size:10px;padding:3px 5px} #compass{top:62px} #rayBox{top:122px} }
- /* Phones: while the panel is open, the flight pad (z-index 5) sat on top of the date/time controls; hide it and lift the panel over the dock */
- @media (max-width:700px){ body:has(#hud:not(.closed)) #joy,body:has(#hud:not(.closed)) #joyShow{display:none} #hud:not(.closed){z-index:6} }
+ /* Phones: a right-hand column (88 px) stays clear of the panel (which starts 10 px in); compass on top, load status wrapped below it */
+ @media (max-width:700px){ #hud{max-width:calc(100% - 98px)} #compass{top:10px} #load{top:70px;max-width:78px;box-sizing:border-box;white-space:normal;text-align:right;font-size:10px;padding:3px 5px} #rayBox{top:150px} }
+ /* Narrow phones: the open panel reaches under the flight pad, so hide the pad while the panel is open; the dock and credits stay on top, and the panel scrolls clear of them */
+ @media (max-width:600px){ body:has(#hud:not(.closed)) #joy,body:has(#hud:not(.closed)) #joyShow{display:none} #hud:not(.closed){padding-bottom:44px} }
 </style>
 </head>
 <body>
@@ -257,15 +257,15 @@ for (const n of ['coarse.bin', 'near.bin']) {
  <div id="rayLegend"></div>
 </div>
 <div id="periodCap"></div>
-<div id="credits" role="button" tabindex="0" aria-expanded="false" title="Data credits (click to show in full)"></div>
-<button type="button" id="creditsBtn" title="Data credits">© Credits</button>
+<div id="credits" role="button" tabindex="0" aria-expanded="false" aria-label="Data credits" title="Data credits (click to show in full)"></div>
+<button type="button" id="creditsBtn" aria-expanded="false" aria-controls="credits" title="Data credits">© Credits</button>
 <div id="caption" role="status" aria-live="polite"><h2 id="capTitle"></h2><div class="date" id="capDate"></div><p id="capText"></p></div>
 <div id="joy" aria-label="Flight controls">
   <button type="button" tabindex="-1" id="joyHide" aria-label="Hide the flight pad" title="Hide the pad (show it again from the button left behind)">×</button>
   <div class="col">
     <button type="button" tabindex="-1" id="jUp" aria-label="Climb" title="Climb (E or R)">▲<kbd>E</kbd></button>
     <button type="button" tabindex="-1" id="jDown" aria-label="Sink" title="Sink (Q or F)">▼<kbd>Q</kbd></button>
-    <button type="button" tabindex="-1" id="jFast" aria-label="Faster" title="Faster, ×4 (hold Shift)">»<kbd>⇧</kbd></button>
+    <button type="button" tabindex="-1" id="jFast" aria-label="Fast, 4 times" aria-pressed="false" title="Faster, ×4 (hold Shift)">»<kbd>⇧</kbd></button>
   </div>
   <div id="joyPad" title="Press and hold to fly: up forward (W/↑), down back (S/↓), sides sideways (A/D). Drag for a gentler, analogue move. The centre ball turns and tilts the view (←/→ turn).">
     <span class="ar n">▲</span><span class="ar s">▼</span><span class="ar w">◀</span><span class="ar e">▶</span>
@@ -293,10 +293,11 @@ for (const n of ['coarse.bin', 'near.bin']) {
 </script>
 <script type="module" src="./data/flyover/flyover_main.js?v=2026-09-27.1900"></script>
 <script>
-(function(){var b=document.body,t=null,c=document.getElementById('credits');function fold(){b.classList.remove('credits-open');c.setAttribute('aria-expanded','false');clearTimeout(t);}
-function open(){b.classList.add('credits-open');c.setAttribute('aria-expanded','true');clearTimeout(t);t=setTimeout(fold,12000);}
+(function(){var b=document.body,t=null,c=document.getElementById('credits');var cb=document.getElementById('creditsBtn');function ex(v){c.setAttribute('aria-expanded',v);cb.setAttribute('aria-expanded',v);}
+function fold(){b.classList.remove('credits-open');ex('false');clearTimeout(t);}
+function open(){b.classList.add('credits-open');ex('true');clearTimeout(t);t=setTimeout(fold,12000);}
 function tog(e){e.stopPropagation();b.classList.contains('credits-open')?fold():open();}
-c.addEventListener('click',tog);c.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();tog(e);}});document.getElementById('creditsBtn').addEventListener('click',tog);
+c.addEventListener('click',tog);c.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();tog(e);}});cb.addEventListener('click',tog);
 document.addEventListener('pointerdown',function(e){if(b.classList.contains('credits-open')&&!e.target.closest('#credits,#creditsBtn'))fold();});})();
 </script>
 </body>
