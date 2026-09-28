@@ -693,8 +693,10 @@ document.getElementById('lmOn').onchange = (ev) => { lmGroup.visible = ev.target
 }
 {
   const cr = document.getElementById('credits');
-  const terrain = 'Terrain: EA lidar DTM \u00a9 Environment Agency; OS Terrain 50 and OS Open Rivers, contains OS data \u00a9 Crown copyright and database right 2026 (OGL). ';
-  if (cr) cr.textContent = terrain + (MON ? MON.credits : '');
+  const terrain = 'Terrain: EA lidar DTM \u00a9 Environment Agency (OGL v3); OS Terrain 50 and OS Open Rivers, contains OS data \u00a9 Crown copyright and database right 2026 (OGL v3). ';
+  const sources = ' Woodhenge posts: Cunnington 1929 plan (heights conjectural). Bulford pits and posts: PAST 113 plan (Harding, Leivers & Silva 2026; post heights conjectural). Tor and Cuckoo Stones: Harding et al. 2025, PPS 90. ';
+  const own = 'Viewer and data compilation \u00a9 2026 Tim Daw, CC BY-SA 4.0. A modelling tool, not a reconstruction.';
+  if (cr) cr.textContent = terrain + (MON ? MON.credits : '') + sources + own;
 }
 
 // ---------------------------------------------------------------- terrain streaming
@@ -1397,10 +1399,10 @@ const TOUR = [
   { en: [415010, 143721], dist: 900, fromDeg: 200, up: 320, look: 12, hold: 5, title: 'Durrington Walls and Woodhenge', date: 'c. 2500 BC',
     text: 'The great henge beside the Avon, with Woodhenge just to the south.' },
   { en: [P.centre.e, P.centre.n], dist: 140, fromDeg: 230, up: 45, look: 3, hold: 5.5, title: 'Woodhenge', date: 'c. 2635 – 2575 BC',
-    text: 'Six oval rings of timber posts, 156 in this model after Maud Cunnington\u2019s plan, with the later bank and ditch around them.' },
+    text: 'Six oval rings of timber posts, 156 in this model after Maud Cunnington\u2019s plan, with the later bank and ditch around them. No posts survive: the post heights are conjecture.' },
 ];
-if (BU) TOUR.push({ en: [BU.origin_e - 25, BU.origin_n - 10], dist: 125, fromDeg: 230, up: 32, look: 2, hold: 6, title: 'Bulford', date: '',
-  text: 'Pits and two standing posts. The line through the posts runs at ' + (BU_POSTS_TRUE ? BU_POSTS_TRUE.true.toFixed(1) : '48.3') + '\u00b0 true, about two degrees south of the modern midsummer sunrise.' });
+if (BU) TOUR.push({ en: [BU.origin_e - 25, BU.origin_n - 10], dist: 125, fromDeg: 230, up: 32, look: 2, hold: 6, title: 'Bulford', date: 'Posts: conjecture',
+  text: 'Pits and two post-pits, from the PAST 113 plan. The posts drawn in them are conjecture (1.6 m above ground). The line through the two post positions runs at ' + (BU_POSTS_TRUE ? BU_POSTS_TRUE.true.toFixed(1) : '48.3') + '\u00b0 true, about two degrees south of the modern midsummer sunrise.' });
 const capEl = document.getElementById('caption');
 function showCaption(s) {
   document.getElementById('capTitle').textContent = s ? s.title : '';
