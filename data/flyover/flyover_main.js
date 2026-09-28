@@ -701,7 +701,7 @@ document.getElementById('lmOn').onchange = (ev) => { lmGroup.visible = ev.target
 {
   const cr = document.getElementById('credits');
   const terrain = 'Terrain: EA lidar DTM \u00a9 Environment Agency (OGL v3); OS Terrain 50 and OS Open Rivers, contains OS data \u00a9 Crown copyright and database right 2026 (OGL v3). ';
-  const sources = ' Woodhenge posts: Cunnington 1929 plan (heights conjectural). Bulford pits and posts: PAST 113 plan (Harding, Leivers & Silva 2026; post heights conjectural). Tor and Cuckoo Stones: Harding et al. 2025, PPS 90. ';
+  const sources = ' Woodhenge posts: Cunnington 1929 plan (heights conjectural). Bulford pits and posts: plan in Harding, Leivers & Silva 2026, \u2018A newly discovered solstitial post alignment in the Stonehenge landscape at Bulford\u2019, PAST 113 (Summer 2026), 2\u20135, Prehistoric Society (post heights conjectural). Tor and Cuckoo Stones: Harding et al. 2025, PPS 90. ';
   const own = 'Viewer and data compilation \u00a9 2026 Tim Daw, CC BY-SA 4.0. A modelling tool, not a reconstruction.';
   if (cr) cr.textContent = terrain + (MON ? MON.credits : '') + sources + own;
 }
