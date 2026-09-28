@@ -1,15 +1,15 @@
 // The flyover page (landscape_v2.html; index.html in the public repo): free flight over the Stonehenge, Woodhenge and Bulford landscape.
 import * as THREE from 'three';
-import * as FS from './flyover_sky.js?v=2026-09-28.1830-local';
+import * as FS from './flyover_sky.js?v=2026-09-28.1845-local';
 // Same URL as the import in flyover_sky.js (no ?v=), so both share one module instance.
 import * as Sky from '../../skyscape_sky.js';
-import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-28.1830-local';
+import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-28.1845-local';
 const { starHorizontal, starsAbove } = FS; // stars from flyover_sky (dates right for years 0-99)
 
 // ---------------------------------------------------------------- basics
 const FLY = window.__fly = { marks: {}, detailDone: false, bytes: {} };
 // Build stamp: the page's <meta name="flyover-build"> must match, or the browser is running cached old code.
-const BUILD = '2026-09-28.1830-local';
+const BUILD = '2026-09-28.1845-local';
 FLY.build = BUILD;
 {
   const want = document.querySelector('meta[name="flyover-build"]');
@@ -1126,7 +1126,9 @@ function flyTo(pose, opts = {}) {
   const dist = from.pos.distanceTo(pose.pos);
   // prefers-reduced-motion: jump straight to the pose (next frame) instead of an arcing flight.
   const still = REDUCED_MOTION.matches;
-  const dur = still ? 1e-3 : opts.dur != null ? opts.dur : THREE.MathUtils.clamp(1.2 + Math.sqrt(dist) / 13, 1.2, 7);
+  // The Speed slider also paces Go to, double-click and tour flights (x1 at the default 40 m/s).
+  const pace = THREE.MathUtils.clamp(Math.sqrt(40 / baseSpeed), 0.4, 2.5);
+  const dur = still ? 1e-3 : opts.dur != null ? opts.dur : THREE.MathUtils.clamp(1.2 + Math.sqrt(dist) / 13, 1.2, 7) * pace;
   flyAnim = { from, to: pose, t: 0, dur, arc: still ? 0 : Math.min(450, dist * 0.12), onDone: opts.onDone || null };
   flight.vel.set(0, 0, 0);
 }
@@ -1161,9 +1163,15 @@ function nudgeSpeed(f) {
 
 const FLIGHT_KEYS = new Set(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyF','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']);
 addEventListener('keydown', (ev) => {
-  // Keys belong to a focused slider, text or number box or list (arrows move the slider, not the camera).
+  // Keys belong to a focused text or number box or list. A focused slider or tick box keeps only the keys it
+  // uses (arrows, Home/End, Page Up/Down; Space), so after moving the Speed slider W/A/S/D, Q/E/R/F and Shift
+  // still fly (they used to do nothing until the slider lost focus).
   const tg = ev.target;
-  if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'SELECT' || tg.tagName === 'TEXTAREA' || tg.isContentEditable)) return;
+  if (tg && (tg.tagName === 'SELECT' || tg.tagName === 'TEXTAREA' || tg.isContentEditable)) return;
+  if (tg && tg.tagName === 'INPUT') {
+    const t = tg.type;
+    if (t === 'range' ? /^(Arrow|Home|End|Page)/.test(ev.code) : t === 'checkbox' || t === 'radio' ? ev.code === 'Space' : true) return;
+  }
   if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
   // During a flight or the tour the left/right arrows turn the view (round its destination) instead of
   // stopping it; N faces north. Neither stops the tour.
@@ -2534,7 +2542,7 @@ function paintFlight(g) {
   const agl = g == null ? null : p.y - g;
   const hdg = ((flight.yaw / DEG + site.conv) % 360 + 360) % 360;
   compassConv = site.conv;
-  const spd = flight.vel.length();
+  const spd = groundSpeed; // measured from the camera's own movement (see tick), not the key/pad velocity
   flightEl.textContent =
     'E ' + (CE + p.x).toFixed(0) + '  N ' + (CN - p.z).toFixed(0) + '\n' +
     'Height ' + (agl == null ? '–' : agl.toFixed(1) + ' m') + ' above ground · ' + (p.y + ORIGIN_OD).toFixed(0) + ' m OD\n' +
@@ -2577,6 +2585,22 @@ function setLowQuality(on, why) {
 paintQuality();
 if (LOWQ) console.info('Low-graphics mode: ' + FLY.qualityWhy + '.');
 
+// Ground speed for the readout: horizontal distance the camera actually moved per second, smoothed (about 0.4 s),
+// so drags, the wheel, Go to flights, the tour and orbiting count as well as keys and the pad (flight.vel only
+// covers keys and the pad, so the readout used to sit at 0.0 m/s for everything else). Jumps (reduced-motion
+// Go to, plan view) are ignored; it settles to 0 when still.
+let groundSpeed = 0; const lastPos = new THREE.Vector3(NaN, 0, 0);
+function measureSpeed(dt) {
+  const d = Math.hypot(flight.pos.x - lastPos.x, flight.pos.z - lastPos.z);
+  lastPos.copy(flight.pos);
+  if (!(dt > 0) || !Number.isFinite(d)) return;
+  const v = d / dt;
+  if (v > 5000) return; // a jump, not a flight
+  groundSpeed += (v - groundSpeed) * (1 - Math.exp(-dt / (v < groundSpeed ? 0.2 : 0.4))); // falls faster than it rises
+  if (groundSpeed < 0.3 && v < 0.05) groundSpeed = 0;
+  FLY.groundSpeed = groundSpeed;
+}
+
 // ---------------------------------------------------------------- frame loop
 let last = performance.now(), firstFrame = true;
 function tick(now) {
@@ -2600,6 +2624,7 @@ function tick(now) {
   stepTour(dt);
   const g = clampFlight();
   applyCamera();
+  measureSpeed(realDt);
   const agl = g == null ? 50 : flight.pos.y - g;
   // Without logarithmic depth (low quality) a larger near plane keeps the far ground from flickering.
   const wantNear = LOWQ && !renderer.capabilities.logarithmicDepthBuffer ? THREE.MathUtils.clamp(agl * 0.12, 1, 60) : THREE.MathUtils.clamp(agl * 0.08, 0.3, 40);
