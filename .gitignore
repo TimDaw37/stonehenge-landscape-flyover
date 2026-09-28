@@ -1,3 +1,14 @@
 __pycache__/
 sources/
 shots/
+# Outputs the tools/ scripts write to the repo root (not published)
+scheduled_monuments_inventory.md
+wb_*.png
+fig24_hi.png
+# Editor / OS / backup leftovers
+*.bak
+*~
+.DS_Store
+Thumbs.db
+~$*
+node_modules/
