@@ -2293,7 +2293,12 @@ for (const [name, p] of Object.entries(window.__early || {})) {
    .catch((err) => worker.postMessage({ type: 'buf', name, error: String(err && err.message || err) }));
 }
 requestAnimationFrame(tick);
-addEventListener('resize', () => { cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+addEventListener('resize', () => {
+  cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix();
+  // devicePixelRatio changes with browser zoom or a move to another screen; keep the same cap as at start.
+  renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.5 : 2));
+  renderer.setSize(innerWidth, innerHeight);
+});
 
 // Hooks for checking from the console and tests.
 FLY.api = {
