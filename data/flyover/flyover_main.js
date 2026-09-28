@@ -2200,7 +2200,9 @@ const hud = document.getElementById('hud');
   const saved = sessionStorage.getItem('fl_hud_open');
   const open = saved != null ? saved === '1' : innerWidth > 700;
   hud.classList.toggle('closed', !open);
-  document.getElementById('hudToggle').onclick = () => { const closed = hud.classList.toggle('closed'); sessionStorage.setItem('fl_hud_open', closed ? '0' : '1'); };
+  const hudBtn = document.getElementById('hudToggle');
+  hudBtn.setAttribute('aria-expanded', String(open));
+  hudBtn.onclick = () => { const closed = hud.classList.toggle('closed'); hudBtn.setAttribute('aria-expanded', String(!closed)); sessionStorage.setItem('fl_hud_open', closed ? '0' : '1'); };
 }
 
 // ---------------------------------------------------------------- frame loop

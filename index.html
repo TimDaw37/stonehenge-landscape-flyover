@@ -146,8 +146,8 @@ for (const n of ['coarse.bin', 'near.bin']) {
 <body>
 <div id="c"></div>
 <div id="hud">
-  <div class="top"><b>Stonehenge landscape <span id="buildStamp" style="font-weight:400;font-size:10px;opacity:.5;margin-left:4px"></span></b><button type="button" id="hudToggle">Controls</button></div>
-  <div class="body">
+  <div class="top"><b>Stonehenge landscape <span id="buildStamp" style="font-weight:400;font-size:10px;opacity:.5;margin-left:4px"></span></b><button type="button" id="hudToggle" aria-controls="hudBody" aria-expanded="true">Controls</button></div>
+  <div class="body" id="hudBody">
   <div class="note classic">Fly anywhere. <kbd>W</kbd><kbd>S</kbd>/<kbd>↑</kbd><kbd>↓</kbd> forward and back, <kbd>A</kbd><kbd>D</kbd> sideways, <kbd>←</kbd><kbd>→</kbd> turn, <kbd>E</kbd>/<kbd>R</kbd> up, <kbd>Q</kbd>/<kbd>F</kbd> down, <kbd>Shift</kbd> faster, <kbd>L</kbd> labels, <kbd>P</kbd> plan view (with alignment rays).<br>Mouse: left-drag grabs and moves the landscape, right-drag (or <kbd>Ctrl</kbd>/<kbd>Alt</kbd>+drag) looks around, middle-drag (or <kbd>Shift</kbd>+right-drag) orbits the grabbed point, wheel moves toward the pointer, double-click flies there. Plan view: drag pans, right-drag turns. Touch: one finger moves the landscape, pinch zooms, twist turns, two-finger drag tilts.</div>
   <div class="note modern" title="Mouse: left-drag grabs and moves the landscape, right-drag (or Ctrl/Alt+drag) looks around, middle-drag (or Shift+right-drag) orbits the grabbed point, wheel moves toward the pointer, double-click flies there. Plan view: drag pans, right-drag turns. Touch: one finger moves the landscape, pinch zooms, twist turns, two-finger drag tilts.">Drag the ground to move it, right-drag to look, wheel to zoom, double-click to fly there. <kbd>L</kbd> labels, <kbd>P</kbd> plan view. The pad (bottom right) flies and shows the keys.</div>
   <label class="t">Go to</label>
@@ -158,7 +158,7 @@ for (const n of ['coarse.bin', 'near.bin']) {
     <button type="button" id="goTour">Tour</button>
   </div>
   <label class="t">Speed <span id="spdLbl"></span></label>
-  <input type="range" id="speed" min="0" max="100" step="1" value="50"/>
+  <input type="range" id="speed" min="0" max="100" step="1" value="50" aria-label="Flight speed"/>
   <div hidden><span id="minLbl"></span><input type="range" id="minAgl" min="1" max="60" step="0.5" value="2"/></div>
   <div class="chk"><label><input type="checkbox" id="labelsOn" checked/> Labels</label></div>
   <div class="chk"><label><input type="checkbox" id="lmOn" checked/> Monuments (Historic England mapping)</label></div>
@@ -207,7 +207,7 @@ for (const n of ['coarse.bin', 'near.bin']) {
     <input type="number" id="epochYear" value="2026" step="1" aria-label="Year" style="width:5.4em;margin-top:3px;padding:4px 6px;border:0;border-radius:4px;background:#243044;color:#eee"/>
   </div>
   <label class="t">Date <span id="doyLbl">21 Jun</span></label>
-  <input type="range" id="doy" min="1" max="365" value="172"/>
+  <input type="range" id="doy" min="1" max="365" value="172" aria-label="Date (day of the year)"/>
   <div class="row">
     <button type="button" data-doy="80">21 Mar</button>
     <button type="button" data-doy="172">21 Jun</button>
@@ -215,7 +215,7 @@ for (const n of ['coarse.bin', 'near.bin']) {
     <button type="button" data-doy="355">21 Dec</button>
   </div>
   <label class="t">Time <span id="utLbl">03:57 UT</span></label>
-  <input type="range" id="utMin" min="0" max="2160" step="1" value="237"/>
+  <input type="range" id="utMin" min="0" max="2160" step="1" value="237" aria-label="Time of day (UT)"/>
   <div class="row">
     <button type="button" id="btnDaySun">Sun's arc</button>
     <button type="button" id="btnDayMoon">Moon's arc</button>
@@ -236,7 +236,7 @@ for (const n of ['coarse.bin', 'near.bin']) {
   <div id="flight"></div>
 </div>
 <div id="load">Loading…</div>
-<svg id="compass" viewBox="-30 -30 60 60" aria-label="Compass: N is true north">
+<svg id="compass" viewBox="-30 -30 60 60" role="img" aria-label="Compass: N is true north">
  <circle r="26" fill="rgba(10,16,24,.6)" stroke="rgba(220,230,240,.35)" stroke-width="1"/>
  <g id="compassRose">
   <path d="M0,-14 L4.5,-2 L0,-4.5 L-4.5,-2 Z" fill="#e8584a"/>
@@ -252,9 +252,9 @@ for (const n of ['coarse.bin', 'near.bin']) {
  <div id="rayLegend"></div>
 </div>
 <div id="periodCap"></div>
-<div id="credits" title="Data credits (click to show in full)"></div>
+<div id="credits" role="button" tabindex="0" aria-expanded="false" title="Data credits (click to show in full)"></div>
 <button type="button" id="creditsBtn" title="Data credits">© Credits</button>
-<div id="caption"><h2 id="capTitle"></h2><div class="date" id="capDate"></div><p id="capText"></p></div>
+<div id="caption" role="status" aria-live="polite"><h2 id="capTitle"></h2><div class="date" id="capDate"></div><p id="capText"></p></div>
 <div id="joy" aria-label="Flight controls">
   <button type="button" tabindex="-1" id="joyHide" title="Hide the pad (show it again from the button left behind)">×</button>
   <div class="col">
@@ -288,10 +288,10 @@ for (const n of ['coarse.bin', 'near.bin']) {
 </script>
 <script type="module" src="./data/flyover/flyover_main.js?v=2026-09-27.1900"></script>
 <script>
-(function(){var b=document.body,t=null;function fold(){b.classList.remove('credits-open');clearTimeout(t);}
-function open(){b.classList.add('credits-open');clearTimeout(t);t=setTimeout(fold,12000);}
+(function(){var b=document.body,t=null,c=document.getElementById('credits');function fold(){b.classList.remove('credits-open');c.setAttribute('aria-expanded','false');clearTimeout(t);}
+function open(){b.classList.add('credits-open');c.setAttribute('aria-expanded','true');clearTimeout(t);t=setTimeout(fold,12000);}
 function tog(e){e.stopPropagation();b.classList.contains('credits-open')?fold():open();}
-document.getElementById('credits').addEventListener('click',tog);document.getElementById('creditsBtn').addEventListener('click',tog);
+c.addEventListener('click',tog);c.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();tog(e);}});document.getElementById('creditsBtn').addEventListener('click',tog);
 document.addEventListener('pointerdown',function(e){if(b.classList.contains('credits-open')&&!e.target.closest('#credits,#creditsBtn'))fold();});})();
 </script>
 </body>
