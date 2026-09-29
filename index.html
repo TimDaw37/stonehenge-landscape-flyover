@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="flyover-build" content="2026-09-28.1900"/>
+<meta name="flyover-build" content="2026-09-29.0615-local"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Stonehenge landscape flyover (Stonehenge, Woodhenge, Bulford) · Tim Daw</title>
 <meta name="description" content="Fly over 12 km of Environment Agency lidar ground around Stonehenge, Woodhenge and Bulford, with the scheduled monuments, a live sun, moon and star sky for any date back to 2500 BC, and a horizon-aware alignment check. A modelling tool, not a reconstruction."/>
@@ -15,6 +15,105 @@ window.__early = {};
 for (const n of ['coarse.bin', 'near.bin']) {
   window.__early[n] = fetch('./data/flyover/' + n).then(r => { if (!r.ok) throw new Error(n + ' ' + r.status); return r.arrayBuffer(); });
 }
+</script>
+<script>
+// Start-up watchdog (2026-09-29). A classic script, so it runs even when a browser cannot load or parse the
+// page's modules. Whatever goes wrong (a module or worker that fails, a download that stalls, an uncaught error
+// before the ground is in), the viewer gets a clear message with Try again and Try low-graphics, never an endless
+// "Loading". Limit: 45 s, extended while data keeps arriving (up to 3 min); ?loadtimeout=<s> changes it (for tests).
+(function () {
+  var Q = new URLSearchParams(location.search);
+  var LIMIT = Math.max(3, +Q.get('loadtimeout') || 45) * 1000, QUIET = Math.min(LIMIT, 20000), HARD = Math.max(LIMIT, 180000);
+  var t0 = Date.now(), last = t0, errs = [], files = {}, state = 'loading', started = false, early = 0, timer = 0, obs = null;
+  function now() { return Date.now(); }
+  function base(u) { try { return new URL(u, location.href).pathname.split('/').pop(); } catch (e) { return String(u); } }
+  function total() { var n = 0; for (var k in files) n += files[k]; return n; }
+  function mb() { var n = total(); return n > 0 ? (n / 1048576).toFixed(1) + ' MB' : ''; }
+  function note(name, n) { if (n > (files[name] || 0)) { files[name] = n; last = now(); } }
+  function paint() {
+    if (started || state !== 'loading') return;
+    var el = document.getElementById('load'); if (el) el.textContent = 'Loading\u2026' + (total() ? ' ' + mb() : '');
+  }
+  try {
+    obs = new PerformanceObserver(function (l) { l.getEntries().forEach(function (e) { note(base(e.name), e.decodedBodySize || e.transferSize || 0); }); paint(); });
+    obs.observe({ type: 'resource', buffered: true });
+  } catch (e) {}
+  function record(text) { if (errs.length < 12) errs.push(Math.round((now() - t0) / 100) / 10 + ' s: ' + text); }
+  function pageHandled() { return !!document.getElementById('glFail'); } // the page's own WebGL panel is showing
+  function onError(e) {
+    if (state === 'ready') return;
+    var t = e.target;
+    if (t && t !== window && t.tagName) record('Could not load ' + (t.src || t.href || t.tagName));
+    else record((e.message || 'Error') + (e.filename ? ' (' + base(e.filename) + ':' + e.lineno + ')' : ''));
+    early++;
+    // Before the main module has started, an error means it never will (for example a browser too old for it).
+    if (!started) setTimeout(function () { if (!started && state === 'loading' && !pageHandled()) show('code'); }, 1500);
+  }
+  addEventListener('error', onError, true);
+  addEventListener('unhandledrejection', function (e) {
+    if (state === 'ready') return;
+    var r = e.reason; record('Unhandled: ' + (r && (r.stack || r.message) || String(r)).split('\n')[0]);
+  });
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function reloadWith(q) {
+    var u = new URL(location.href); u.searchParams.delete('retry');
+    if (q) u.searchParams.set('quality', q);
+    location.href = u.href;
+  }
+  var WHY = {
+    code: ['The 3D viewer could not start in this browser.', 'This browser could not run the viewer\u2019s code (see Technical details). The flyover needs Chrome or Edge 111+, Firefox 115+ or Safari 16.4+ (2023 or later) with WebGL; if the browser is at least that, a file may not have downloaded, so try again.'],
+    timeout: ['The 3D view did not finish loading.', 'Nothing more has arrived for a while, so loading has stopped rather than wait for ever. The connection may be slow or blocked, or the browser may be struggling.'],
+    worker: ['The 3D view did not finish loading.', 'The part of the viewer that downloads and builds the ground stopped working.']
+  };
+  function show(kind, detail) {
+    if (state !== 'loading' || pageHandled()) return;
+    state = 'failed'; clearInterval(timer);
+    var w = WHY[kind] || WHY.timeout, F = window.__fly || {};
+    var el = document.getElementById('load'); if (el) { el.textContent = 'Loading stopped'; el.style.opacity = '1'; }
+    var lines = [
+      'Reason: ' + kind + (detail ? ' \u2013 ' + detail : ''),
+      'Page build: ' + ((document.querySelector('meta[name="flyover-build"]') || {}).content || '?'),
+      'Browser: ' + navigator.userAgent,
+      'After ' + Math.round((now() - t0) / 1000) + ' s; received ' + (mb() || '0 MB') + '; code started: ' + (started ? 'yes' : 'no'),
+      'Steps done: ' + (F.marks ? Object.keys(F.marks).join(', ') || 'none' : 'none')
+    ].concat(errs.length ? ['Errors:'].concat(errs) : ['Errors: none caught']);
+    var box = document.createElement('div');
+    box.id = 'bootFail'; box.setAttribute('role', 'alert');
+    box.innerHTML = '<h2>' + esc(w[0]) + '</h2><p>' + esc(w[1]) + '</p>' +
+      '<p><button type="button" id="bootRetry">Try again</button> <button type="button" id="bootLow">Try low-graphics</button>' +
+      (started ? ' <button type="button" id="bootClose">Close</button>' : '') + '</p>' +
+      '<p class="bootHint">If it keeps failing, try another up-to-date browser (Chrome, Edge or Firefox), or another device.</p>' +
+      '<details><summary>Technical details</summary><pre>' + esc(lines.join('\n')) + '</pre></details>';
+    var put = function () {
+      document.body.appendChild(box);
+      document.getElementById('bootRetry').onclick = function () { reloadWith(''); };
+      document.getElementById('bootLow').onclick = function () { reloadWith('low'); };
+      var c = document.getElementById('bootClose'); if (c) c.onclick = function () { box.remove(); };
+      document.getElementById('bootRetry').focus();
+    };
+    if (document.body) put(); else addEventListener('DOMContentLoaded', put);
+    console.error('Flyover start-up failed (' + kind + (detail ? ': ' + detail : '') + ').' + (errs.length ? ' ' + errs.join(' | ') : ''));
+  }
+  timer = setInterval(function () {
+    if (state !== 'loading') return clearInterval(timer);
+    if (pageHandled()) { state = 'handled'; return clearInterval(timer); }
+    var t = now();
+    if (t - t0 > HARD) show('timeout', 'still loading after ' + Math.round(HARD / 1000) + ' s');
+    else if (t - t0 > LIMIT && t - last > QUIET) show('timeout', 'no progress for ' + Math.round((t - last) / 1000) + ' s');
+  }, 1000);
+  if (!('noModule' in document.createElement('script'))) setTimeout(function () { show('code', 'no JavaScript module support'); }, 0);
+  window.__boot = {
+    started: function () { started = true; last = now(); },
+    progress: function (name, n) { if (name) note(name, n); else last = now(); },
+    mb: mb,
+    fail: show,
+    ready: function () {
+      if (state === 'failed') { var b = document.getElementById('bootFail'); if (b) b.remove(); var el = document.getElementById('load'); if (el) el.style.opacity = ''; }
+      state = 'ready'; clearInterval(timer); if (obs) try { obs.disconnect(); } catch (e) {}
+    },
+    info: function () { return { state: state, started: started, ms: now() - t0, mb: mb(), errs: errs.slice() }; }
+  };
+})();
 </script>
 <link rel="modulepreload" href="./data/flyover/three.module.min.js"/>
 <link rel="modulepreload" href="./vendor/astronomy.esm.js"/>
@@ -152,14 +251,15 @@ for (const n of ['coarse.bin', 'near.bin']) {
  #alignOut.brief .more{display:none}
  /* No WebGL: the start-up failure panel (role=alert) replaces the view and its controls; context-lost note */
  body.no-webgl #joy,body.no-webgl #joyShow,body.no-webgl #dock,body.no-webgl #compassCtl,body.no-webgl #hud,body.no-webgl #touch{display:none}
- #glFail{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10;width:min(560px,calc(100% - 24px));max-height:calc(100% - 24px);overflow:auto;box-sizing:border-box;background:#101a26;color:#eef2f6;border:1px solid #d9774a;border-radius:10px;padding:16px 18px;font-size:14px;line-height:1.45;box-shadow:0 6px 30px rgba(0,0,0,.6)}
- #glFail h2{margin:0 0 6px;font-size:18px;color:#ffb48a}
+ #glFail,#bootFail{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10;width:min(560px,calc(100% - 24px));max-height:calc(100% - 24px);overflow:auto;box-sizing:border-box;background:#101a26;color:#eef2f6;border:1px solid #d9774a;border-radius:10px;padding:16px 18px;font-size:14px;line-height:1.45;box-shadow:0 6px 30px rgba(0,0,0,.6)}
+ #glFail h2,#bootFail h2{margin:0 0 6px;font-size:18px;color:#ffb48a}
  #glFail ol{margin:4px 0 8px;padding-left:22px} #glFail li{margin:4px 0}
  #glFail code{background:#243044;color:#fff;border-radius:3px;padding:1px 5px;user-select:all;-webkit-user-select:all;font-size:13px}
- #glFail button{margin:0 0 0 4px;padding:3px 9px;background:#2f4260;color:#fff}
- #glFail button:focus-visible{outline:2px solid #ffd27a;outline-offset:2px}
- #glFail details{margin-top:6px} #glFail summary{cursor:pointer;color:#cfd8e3}
- #glFail pre{white-space:pre-wrap;word-break:break-word;font:12px/1.4 ui-monospace,Consolas,monospace;background:#0a1018;color:#dfe7ef;padding:8px;border-radius:6px;margin:6px 0 0}
+ #glFail button,#bootFail button{margin:0 0 0 4px;padding:3px 9px;background:#2f4260;color:#fff}
+ #glFail button:focus-visible,#bootFail button:focus-visible{outline:2px solid #ffd27a;outline-offset:2px}
+ #glFail details,#bootFail details{margin-top:6px} #glFail summary,#bootFail summary{cursor:pointer;color:#cfd8e3}
+ #glFail pre,#bootFail pre{white-space:pre-wrap;word-break:break-word;font:12px/1.4 ui-monospace,Consolas,monospace;background:#0a1018;color:#dfe7ef;padding:8px;border-radius:6px;margin:6px 0 0}
+ #bootFail button{margin:0 6px 0 0;padding:5px 12px} #bootFail .bootHint{font-size:12.5px;color:#cfd8e3}
  #qualityBtn{margin:0 0 0 6px;padding:1px 7px;font-size:10px;font-weight:400;border-radius:9px;background:#3a2a1a;color:#ffd9b8;border:1px solid #8a5a34;vertical-align:1px}
  #qualityBtn:hover{background:#4a3624}
  @media (prefers-reduced-motion:reduce){ #caption,#periodCap,#joy,#compassCtl{transition:none} }
@@ -258,6 +358,7 @@ for (const n of ['coarse.bin', 'near.bin']) {
     <button type="button" id="alGo">Go</button><button type="button" id="alDetails" hidden aria-pressed="false" title="Show or hide the full workings">Details</button><button type="button" id="alSwap" hidden title="Stand at the other end of the Bulford post axis">Swap end</button>
   </div>
   <div id="alignOut" class="note">Choose a site and an event, then Go: the view drops to eye height (1.6 m) facing the event.</div>
+  <div class="note" id="sysNeeds">Needs a 2023-or-later browser (Chrome/Edge 111+, Firefox 115+, Safari 16.4+) with WebGL and 4 GB RAM or more; first visit downloads about 2.6 MB (5.1 MB unpacked). If it will not start, add <code>?quality=low</code> to the address.</div>
   </div>
   <div id="flight"></div>
 </div>
@@ -307,15 +408,12 @@ for (const n of ['coarse.bin', 'near.bin']) {
 <script src="./woodhenge/posts.js"></script>
 <script src="./woodhenge/horizon.js"></script>
 <script src="./data/bulford_sites.js"></script>
-<script src="./data/flyover/bulford_features.js?v=2026-09-28.1900"></script>
+<script src="./data/flyover/bulford_features.js?v=2026-09-29.0615-local"></script>
 <script src="./data/site_ground_od.js"></script>
 <script src="./data/locked_poses.js"></script>
-<script src="./data/flyover/monuments.js?v=2026-09-28.1900"></script>
+<script src="./data/flyover/monuments.js?v=2026-09-29.0615-local"></script>
 <script src="./data/bright_stars.js"></script>
-<script type="importmap">
-{"imports":{"three":"./data/flyover/three.module.min.js"}}
-</script>
-<script type="module" src="./data/flyover/flyover_main.js?v=2026-09-28.1900"></script>
+<script type="module" src="./data/flyover/flyover_main.js?v=2026-09-29.0615-local"></script>
 <script>
 (function(){var b=document.body,t=null,c=document.getElementById('credits');var cb=document.getElementById('creditsBtn');function ex(v){c.setAttribute('aria-expanded',v);cb.setAttribute('aria-expanded',v);}
 function fold(){b.classList.remove('credits-open');ex('false');clearTimeout(t);}

@@ -1,15 +1,20 @@
 // The flyover page (landscape_v2.html; index.html in the public repo): free flight over the Stonehenge, Woodhenge and Bulford landscape.
-import * as THREE from 'three';
-import * as FS from './flyover_sky.js?v=2026-09-28.1900';
+// A relative path, not the bare 'three' plus an import map: Firefox (ESR 115 and current 156 alike) ignores an
+// import map that comes after a <link rel=modulepreload>, and then the page never started in Firefox at all.
+import * as THREE from './three.module.min.js';
+import * as FS from './flyover_sky.js?v=2026-09-29.0615-local';
 // Same URL as the import in flyover_sky.js (no ?v=), so both share one module instance.
 import * as Sky from '../../skyscape_sky.js';
-import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-28.1900';
+import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-29.0615-local';
 const { starHorizontal, starsAbove } = FS; // stars from flyover_sky (dates right for years 0-99)
 
 // ---------------------------------------------------------------- basics
 const FLY = window.__fly = { marks: {}, detailDone: false, bytes: {} };
+// Start-up watchdog (classic script in index.html): tell it the code is running, show progress, report failures.
+const BOOT = window.__boot || { started() {}, progress() {}, mb: () => '', fail() {}, ready() {} };
+BOOT.started();
 // Build stamp: the page's <meta name="flyover-build"> must match, or the browser is running cached old code.
-const BUILD = '2026-09-28.1900';
+const BUILD = '2026-09-29.0615-local';
 FLY.build = BUILD;
 {
   const want = document.querySelector('meta[name="flyover-build"]');
@@ -900,7 +905,7 @@ function paintLoad() {
   const t = (b) => b ? '✓' : '…';
   loadEl.textContent = loadState.error ? ('Ground: ' + loadState.error)
     : FLY.detailDone ? 'Ground: full detail' + (loadState.far ? '' : ' · horizon …')
-    : `Ground: wide ${t(loadState.coarse)} · Stonehenge ${t(loadState.near)} · detail ${loadState.tiles}/${loadState.nTiles}`;
+    : `Ground: wide ${t(loadState.coarse)} · Stonehenge ${t(loadState.near)} · detail ${loadState.tiles}/${loadState.nTiles}` + (BOOT.mb() ? ' · ' + BOOT.mb() : '');
   loadEl.style.opacity = FLY.detailDone ? '0.45' : '1';
 }
 paintLoad();
@@ -979,7 +984,9 @@ const addQueue = [];
 const worker = new Worker(new URL('./terrain_worker.js?v=' + BUILD, import.meta.url));
 worker.onmessage = (ev) => {
   const d = ev.data;
-  if (d.type === 'bytes') { FLY.bytes[d.name] = d.bytes; return; }
+  BOOT.progress(); // any message from the ground worker counts as progress for the start-up watchdog
+  if (d.type === 'progress') { BOOT.progress(d.name, d.bytes); if (!FLY.detailDone) paintLoad(); return; }
+  if (d.type === 'bytes') { FLY.bytes[d.name] = d.bytes; BOOT.progress(d.name, d.bytes); return; }
   if (d.type === 'grid') {
     grids[d.name] = d;
     groundVer++;
@@ -1077,7 +1084,7 @@ worker.onmessage = (ev) => {
   }
   if (d.type === 'done') {
     addQueue.push(() => {
-      FLY.detailDone = true; mark('detailDone');
+      FLY.detailDone = true; mark('detailDone'); BOOT.ready();
       holeDirty = true;
       seatWoodhenge();
       groundChanged();
@@ -1085,10 +1092,11 @@ worker.onmessage = (ev) => {
     });
     return;
   }
-  if (d.type === 'error') { loadState.error = d.message; paintLoad(); console.warn('terrain: ' + d.message); }
+  if (d.type === 'error') { loadState.error = d.message; paintLoad(); console.warn('terrain: ' + d.message); if (!FLY.detailDone && !/^(monuments|far ground):/.test(d.message)) BOOT.fail('worker', d.message); } // those two are extras
 };
 // The worker script itself failed to load or threw outside its own try/catch.
-worker.onerror = (e) => { loadState.error = 'worker failed (' + (e.message || 'load error') + ')'; paintLoad(); console.warn('terrain worker failed', e.message || e); };
+worker.onerror = (e) => { loadState.error = 'worker failed (' + (e.message || 'load error') + ')'; paintLoad(); console.warn('terrain worker failed', e.message || e); if (!FLY.detailDone) BOOT.fail('worker', e.message || 'the worker script failed to load'); };
+worker.onmessageerror = () => { if (!FLY.detailDone) BOOT.fail('worker', 'a message from the worker could not be read'); };
 // Better ground arrived: reseat the stones and redo an automatic rise/set time.
 function groundChanged() {
   seatStones();

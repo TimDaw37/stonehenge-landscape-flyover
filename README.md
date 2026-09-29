@@ -6,6 +6,14 @@ A browser flight over the Stonehenge, Woodhenge and Bulford landscape: 12 km of 
 
 It is a single static page (three.js + astronomy-engine, no build step). To run it locally, serve the folder with any static web server, for example `python -m http.server`, and open `index.html`. Opening the file straight from disk does not work because the page uses a web worker and fetches data files.
 
+## System requirements
+
+- **Browser:** a 2023-or-later desktop or mobile browser with JavaScript modules and WebGL: Chrome or Edge 111+, Firefox 115+ (including Firefox ESR 115, the last version for Windows 7 and 8.1), or Safari 16.4+ (iPhone/iPad iOS 16.4+). Tested: current Chrome and Firefox, and Firefox ESR 115. Safari and older Chromium builds (such as Chrome/Edge 109 on Windows 8.1) are expected to work but have not been tested.
+- **Graphics:** WebGL 2 preferred (WebGL 1 may work). Hardware graphics acceleration should be on. On software graphics or weak integrated GPUs the page switches to low-graphics mode by itself; you can also force it with `?quality=low` (or back with `?quality=high`).
+- **Memory:** about 140 MB of graphics memory in full quality at 1080p (about 36 MB in low-graphics mode); 4 GB of system RAM or more is recommended.
+- **Download:** about 2.6 MB on the first visit (5.1 MB unpacked; 26 files, all served from this site: no CDN, web fonts, map tiles or tracking). The browser caches it for later visits.
+- **If it will not start:** the page stops after 45 seconds without progress (longer while data is still arriving) and says what went wrong, with **Try again** and **Try low-graphics** buttons and technical details to send with a bug report.
+
 ## Controls
 
 - **W / S** or **↑ / ↓**: forward and back. **A / D**: sideways. **← / →**: turn.

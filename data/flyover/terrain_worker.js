@@ -436,6 +436,22 @@ function earlyBuf(name) {
   return early[name];
 }
 let earlyNames = [];
+// Read a response in chunks, telling the page every 128 KB (for the MB count and the start-up watchdog).
+async function readWithProgress(r, name) {
+  if (!r.body || !r.body.getReader) return r.arrayBuffer();
+  const rd = r.body.getReader(), parts = [];
+  let n = 0, told = 0;
+  for (;;) {
+    const { done, value } = await rd.read();
+    if (done) break;
+    parts.push(value); n += value.byteLength;
+    if (n - told >= 131072) { told = n; self.postMessage({ type: 'progress', name, bytes: n }); }
+  }
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.byteLength; }
+  return out.buffer;
+}
 async function get(name) {
   if (earlyNames.includes(name)) {
     const buf = await earlyBuf(name).p;
@@ -444,7 +460,7 @@ async function get(name) {
   }
   const r = await fetch(BASE + name);
   if (!r.ok) throw new Error(name + ' ' + r.status);
-  const buf = await r.arrayBuffer();
+  const buf = await readWithProgress(r, name);
   self.postMessage({ type: 'bytes', name, bytes: buf.byteLength });
   return buf;
 }
