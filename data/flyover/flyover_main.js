@@ -2,10 +2,10 @@
 // A relative path, not the bare 'three' plus an import map: Firefox (ESR 115 and current 156 alike) ignores an
 // import map that comes after a <link rel=modulepreload>, and then the page never started in Firefox at all.
 import * as THREE from './three.module.min.js';
-import * as FS from './flyover_sky.js?v=2026-09-29.0615-local';
+import * as FS from './flyover_sky.js?v=2026-09-29.0630';
 // Same URL as the import in flyover_sky.js (no ?v=), so both share one module instance.
 import * as Sky from '../../skyscape_sky.js';
-import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-29.0615-local';
+import { makeAligner, ALIGN_EVENTS, dateLabel, utLabel, REACH_MIN } from './align_core.js?v=2026-09-29.0630';
 const { starHorizontal, starsAbove } = FS; // stars from flyover_sky (dates right for years 0-99)
 
 // ---------------------------------------------------------------- basics
@@ -14,7 +14,7 @@ const FLY = window.__fly = { marks: {}, detailDone: false, bytes: {} };
 const BOOT = window.__boot || { started() {}, progress() {}, mb: () => '', fail() {}, ready() {} };
 BOOT.started();
 // Build stamp: the page's <meta name="flyover-build"> must match, or the browser is running cached old code.
-const BUILD = '2026-09-29.0615-local';
+const BUILD = '2026-09-29.0630';
 FLY.build = BUILD;
 {
   const want = document.querySelector('meta[name="flyover-build"]');
